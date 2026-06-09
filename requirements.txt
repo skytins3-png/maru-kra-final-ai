@@ -1,0 +1,586 @@
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import requests
+from datetime import datetime
+import time
+
+st.set_page_config(
+    page_title="MARU KRA FINAL TOTAL AI",
+    page_icon="🐎",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+.stApp { background:#0f0f0f; color:#eeeeee; }
+.block-container { max-width:1550px; padding-top:.8rem; padding-bottom:1rem; }
+.main-title { border:1px solid #444; background:#1b1b1b; padding:13px 15px; color:#fff; font-size:25px; font-weight:900; border-radius:12px; }
+.sub-title { border:1px solid #444; background:#171717; padding:9px 12px; color:#d6d6d6; font-size:14px; font-weight:700; margin-bottom:10px; border-radius:10px; }
+.score-box { border:2px solid #ffd84d; background:#181818; padding:15px; border-radius:15px; margin-bottom:12px; }
+.card { border:1px solid #444; background:#151515; padding:13px; border-radius:14px; margin-bottom:8px; }
+.engine-card { border:1px solid #444; background:#171717; padding:12px; border-radius:12px; margin-bottom:10px; }
+.engine-name { font-weight:900; font-size:15px; }
+.engine-desc { color:#bdbdbd; font-size:12px; margin-bottom:6px; }
+.bar-shell { height:15px; background:#222; border:1px solid #555; border-radius:8px; overflow:hidden; }
+.bar-fill { height:100%; }
+.good { color:#51ff6b; font-weight:900; }
+.gold { color:#ffd84d; font-weight:900; }
+.bad { color:#ff7777; font-weight:900; }
+.small-note { color:#bfbfbf; font-size:13px; }
+.warning-box { border:1px solid #7b6c22; background:#252212; color:#ffe98a; padding:10px; border-radius:10px; font-weight:700; }
+.stButton>button { width:100%; border-radius:12px; font-weight:900; min-height:46px; font-size:16px; }
+a.buy-link { display:block; text-align:center; background:#ffcc00; color:#111; padding:15px; border-radius:14px; font-size:22px; font-weight:900; text-decoration:none; margin:10px 0; }
+.log-box { background:#101010; color:#d7ffd7; border:1px solid #555; padding:10px; min-height:160px; font-family:Consolas, monospace; font-size:13px; white-space:pre-wrap; border-radius:10px; }
+@media (max-width: 700px) {
+    .main-title { font-size:20px; }
+    .block-container { padding-left:.55rem; padding-right:.55rem; }
+}
+</style>
+""", unsafe_allow_html=True)
+
+KRA_URLS = {
+    "서울경마공원": {
+        "main": "https://race.kra.co.kr/",
+        "entry": "https://race.kra.co.kr/chulmainfo/ChulmaDetailInfoList.do?Act=02&Sub=1&meet=1",
+        "score": "https://race.kra.co.kr/raceScore/ScoretableScoreList.do?Act=04&Sub=1&meet=1"
+    },
+    "부산경남경마공원": {
+        "main": "https://race.kra.co.kr/busanMain.do",
+        "entry": "https://race.kra.co.kr/chulmainfo/ChulmaDetailInfoList.do?Act=02&Sub=1&meet=3",
+        "score": "https://race.kra.co.kr/raceScore/ScoretableScoreList.do?Act=04&Sub=1&meet=3"
+    },
+    "제주경마공원": {
+        "main": "https://race.kra.co.kr/jejuMain.do",
+        "entry": "https://race.kra.co.kr/chulmainfo/ChulmaDetailInfoList.do?Act=02&Sub=1&meet=2",
+        "score": "https://race.kra.co.kr/raceScore/ScoretableScoreList.do?Act=04&Sub=1&meet=2"
+    }
+}
+
+COLUMNS = [
+    "경주일","경마장","경주번호","경주마","마번","줄","기수","거리","부담중량","배당률",
+    "직전순위","지지난순위","순위","나이","성별","부마","모마","혈통점수",
+    "기수승률","기수복승률","최근3경주평균순위","최근5경주평균순위","최근승률",
+    "지구력점수","스피드점수","순발력점수","막판추입점수","트랙적성","거리적성",
+    "컨디션점수","훈련점수","출전간격일","체중증감","주로상태적성"
+]
+
+sample_rows = [
+    ["2026-05-05","서울경마공원",1,"번개질주",1,"1째줄","김철수",1200,55,3.6,2,4,1,4,"수","스피드킹","퀸러너",86,18.5,39.5,1.7,2.0,40,78,91,90,76,88,90,84,82,21,-1,86],
+    ["2026-05-05","서울경마공원",1,"태양왕",2,"2째줄","이영호",1200,56,5.2,4,3,3,5,"수","파워로드","골드퀸",78,15.2,34.1,2.8,3.1,25,72,84,82,74,80,79,78,76,18,2,79],
+    ["2026-05-12","서울경마공원",2,"흑룡",4,"4째줄","최강준",1400,56,6.5,6,2,4,6,"수","장거리왕","마라톤퀸",82,13.4,31.0,2.3,2.6,30,88,73,71,89,82,85,80,81,24,1,82],
+    ["2026-05-19","부산경남경마공원",3,"백호질주",5,"5째줄","이영호",1800,55.5,2.8,2,1,1,4,"수","킹스로드","실버퀸",88,15.2,34.1,1.9,2.1,45,91,79,77,92,86,89,87,88,24,-2,88],
+    ["2026-05-19","부산경남경마공원",3,"청룡스톰",6,"6째줄","정태풍",1800,54.5,7.2,5,4,4,5,"거","블루스톰","블루퀸",79,12.1,29.2,3.8,3.5,20,74,82,83,73,78,77,76,75,14,3,76],
+    ["2026-05-26","제주경마공원",4,"한라질주",8,"8째줄","오한라",1110,54,4.4,2,2,1,4,"수","한라킹","제주퀸",81,14.4,33.2,2.4,2.7,32,77,87,86,78,83,82,81,80,20,1,81],
+    ["2026-06-02","서울경마공원",5,"번개질주",1,"1째줄","김철수",1200,55,3.2,2,1,1,4,"수","스피드킹","퀸러너",86,18.5,39.5,1.7,2.0,40,78,91,90,76,90,90,84,82,14,-1,86],
+    ["2026-06-02","서울경마공원",5,"태양왕",2,"2째줄","이영호",1200,56,5.1,1,3,3,5,"수","파워로드","골드퀸",78,15.2,34.1,2.8,3.1,25,72,84,82,74,80,79,78,76,21,2,79],
+    ["2026-06-06","부산경남경마공원",6,"백호질주",5,"5째줄","이영호",1800,55.5,2.8,1,2,1,4,"수","킹스로드","실버퀸",88,15.2,34.1,1.9,2.1,45,91,79,77,92,86,89,87,88,18,-2,88],
+    ["2026-06-06","부산경남경마공원",6,"흑룡",4,"4째줄","최강준",1800,56.5,4.0,2,4,2,6,"수","장거리왕","마라톤퀸",82,13.4,31.0,2.3,2.6,30,88,73,71,89,82,85,80,81,18,1,82],
+]
+sample_data = pd.DataFrame(sample_rows, columns=COLUMNS)
+sample_data["경주일"] = pd.to_datetime(sample_data["경주일"])
+
+for key, default in {
+    "df": sample_data.copy(),
+    "previous_df": pd.DataFrame(),
+    "live_tables": {},
+    "last_fetch_status": "대기",
+    "last_refresh": "",
+    "today_spent": 0,
+    "buy_count": 0,
+    "log": "[READY] MARU KRA FINAL TOTAL AI 준비 완료\n",
+    "last_sms": ""
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+def add_log(text):
+    st.session_state.log += f"[{datetime.now().strftime('%H:%M:%S')}] {text}\n"
+
+def ensure_columns(df):
+    data = df.copy()
+    defaults = {c: None for c in COLUMNS}
+    defaults.update({"경마장":"", "경주마":"", "줄":"", "기수":"", "성별":"", "부마":"", "모마":""})
+    for c, v in defaults.items():
+        if c not in data.columns:
+            data[c] = v
+    data["경주일"] = pd.to_datetime(data["경주일"], errors="coerce")
+    for c in [x for x in COLUMNS if x not in ["경주일","경마장","경주마","줄","기수","성별","부마","모마"]]:
+        data[c] = pd.to_numeric(data[c], errors="coerce")
+    data["줄"] = data.apply(lambda r: r["줄"] if str(r["줄"]).strip() not in ["", "None", "nan"] else (f"{int(r['마번'])}째줄" if pd.notna(r["마번"]) else ""), axis=1)
+    return data
+
+def normalize(s, high_is_good=True, default=55):
+    s = pd.to_numeric(s, errors="coerce")
+    if s.notna().sum() == 0:
+        return pd.Series([default]*len(s), index=s.index)
+    mn, mx = s.min(), s.max()
+    if mn == mx:
+        return pd.Series([default]*len(s), index=s.index)
+    val = (s-mn)/(mx-mn)*100
+    if not high_is_good:
+        val = 100-val
+    return val.fillna(default)
+
+def clamp(s):
+    return pd.to_numeric(s, errors="coerce").fillna(55).clip(0,100)
+
+def age_engine(age):
+    a = pd.to_numeric(age, errors="coerce")
+    return a.apply(lambda x: 75 if pd.isna(x) else max(25, min(100, 100-abs(x-4.5)*18)))
+
+def rest_engine(days):
+    d = pd.to_numeric(days, errors="coerce")
+    return d.apply(lambda x: 60 if pd.isna(x) else max(30, 100-abs(x-21)*2.2))
+
+def body_engine(change):
+    c = pd.to_numeric(change, errors="coerce")
+    return c.apply(lambda x: 60 if pd.isna(x) else max(30, 100-abs(x)*8))
+
+def improvement_score(row):
+    prev2, prev1, now = row.get("지지난순위"), row.get("직전순위"), row.get("순위")
+    score = 50
+    if pd.notna(prev2) and pd.notna(prev1):
+        score += max(-20, min(25, (prev2-prev1)*8))
+    if pd.notna(prev1) and pd.notna(now):
+        score += max(-25, min(35, (prev1-now)*10))
+    return max(0, min(100, score))
+
+def change_reason(row):
+    r=[]
+    if pd.notna(row.get("지지난순위")) and pd.notna(row.get("직전순위")) and row["직전순위"] < row["지지난순위"]:
+        r.append(f"지지난 {int(row['지지난순위'])}위→직전 {int(row['직전순위'])}위 상승")
+    if pd.notna(row.get("직전순위")) and pd.notna(row.get("순위")) and row["순위"] < row["직전순위"]:
+        r.append(f"직전 {int(row['직전순위'])}위→이번 {int(row['순위'])}위 상승")
+    if pd.notna(row.get("체중증감")) and abs(row["체중증감"]) <= 2: r.append("체중 안정")
+    if pd.notna(row.get("출전간격일")) and 14 <= row["출전간격일"] <= 28: r.append("출전간격 안정")
+    if pd.notna(row.get("컨디션점수")) and row["컨디션점수"] >= 80: r.append("컨디션 양호")
+    if pd.notna(row.get("트랙적성")) and row["트랙적성"] >= 80: r.append("트랙 적성")
+    return " / ".join(r) if r else "종합 점수 기준"
+
+def reason(row):
+    r=[]
+    for name, col, th in [("기수","기수엔진",75),("혈통","혈통엔진",80),("최근성적","최근성적엔진",75),("스피드","스피드엔진",82),("지구력","지구력엔진",82),("트랙","트랙엔진",82),("거리","거리엔진",82),("컨디션","컨디션엔진",82),("상승세","상승세엔진",75)]:
+        if row.get(col,0) >= th: r.append(name)
+    return " / ".join(r) if r else "종합균형"
+
+def run_engine(df, weights):
+    data = ensure_columns(df)
+    data["기수엔진"] = normalize(data["기수승률"], True, 55)*.55 + normalize(data["기수복승률"], True, 55)*.45
+    data["혈통엔진"] = clamp(data["혈통점수"])
+    data["나이엔진"] = age_engine(data["나이"])
+    data["최근성적엔진"] = normalize(data["최근3경주평균순위"].fillna(data["순위"]), False, 55)*.45 + normalize(data["최근5경주평균순위"].fillna(data["순위"]), False, 55)*.25 + normalize(data["최근승률"], True, 55)*.30
+    data["스피드엔진"] = clamp(data["스피드점수"])*.65 + clamp(data["순발력점수"])*.35
+    endurance = clamp(data["지구력점수"])*.55 + clamp(data["막판추입점수"])*.45
+    data["지구력엔진"] = (endurance * data["거리"].apply(lambda x: 1.08 if pd.notna(x) and x >= 1600 else 1.0)).clip(upper=100)
+    data["트랙엔진"] = clamp(data["트랙적성"])*.65 + clamp(data["주로상태적성"])*.35
+    data["거리엔진"] = clamp(data["거리적성"])
+    data["부담중량엔진"] = normalize(data["부담중량"], False, 55)
+    data["컨디션엔진"] = clamp(data["컨디션점수"])*.45 + clamp(data["훈련점수"])*.35 + rest_engine(data["출전간격일"])*.20
+    data["체중변화엔진"] = body_engine(data["체중증감"])
+    data["배당안정성엔진"] = normalize(data["배당률"], False, 55)
+    data["상승세엔진"] = data.apply(improvement_score, axis=1)
+    data["한달변경요인"] = data.apply(change_reason, axis=1)
+    data["리스크방어점수"] = (data["컨디션엔진"]*.25 + data["체중변화엔진"]*.20 + data["부담중량엔진"]*.18 + data["배당안정성엔진"]*.12 + data["최근성적엔진"]*.15 + data["상승세엔진"]*.10).round(2)
+    data["코스전략엔진"] = data.apply(lambda r: (r["스피드엔진"]*.55+r["기수엔진"]*.20+r["거리엔진"]*.25) if pd.notna(r["거리"]) and r["거리"]<=1200 else (r["지구력엔진"]*.45+r["거리엔진"]*.30+r["트랙엔진"]*.25) if pd.notna(r["거리"]) and r["거리"]>=1600 else (r["스피드엔진"]*.30+r["지구력엔진"]*.30+r["거리엔진"]*.25+r["기수엔진"]*.15), axis=1).round(2)
+    data["엔진종합점수"] = sum(data[k]*v for k,v in weights.items()).round(2)
+    data["최종추천점수"] = (data["엔진종합점수"]*.80 + data["리스크방어점수"]*.20).round(2)
+    data["추천등급"] = data.apply(lambda r: "강추천" if r["최종추천점수"]>=78 and r["리스크방어점수"]>=65 else "추천" if r["최종추천점수"]>=70 else "관찰" if r["최종추천점수"]>=62 else "제외", axis=1)
+    data["리스크등급"] = data.apply(lambda r: "A 안정권" if r["최종추천점수"]>=78 and r["리스크방어점수"]>=65 else "B 관심권" if r["최종추천점수"]>=68 else "C 보류권" if r["최종추천점수"]>=58 else "D 위험권", axis=1)
+    data["선정이유"] = data.apply(reason, axis=1)
+    return data.sort_values("최종추천점수", ascending=False)
+
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_html_tables(url):
+    headers = {"User-Agent":"Mozilla/5.0", "Accept-Language":"ko-KR,ko;q=0.9,en;q=0.8"}
+    try:
+        r = requests.get(url, headers=headers, timeout=12)
+        r.raise_for_status()
+        tables = pd.read_html(r.text)
+        clean = []
+        for t in tables:
+            t = t.dropna(how="all").dropna(axis=1, how="all")
+            if len(t) > 0:
+                t.columns = [str(c).replace("\n"," ").strip() for c in t.columns]
+                clean.append(t)
+        return {"ok": True, "url": url, "tables": clean, "count": len(clean), "error": ""}
+    except Exception as e:
+        return {"ok": False, "url": url, "tables": [], "count": 0, "error": str(e)}
+
+def pick_col(df, terms):
+    for term in terms:
+        for c in df.columns:
+            if term in str(c):
+                return c
+    return None
+
+def normalize_kra_table(course, table):
+    df = table.copy()
+    out = pd.DataFrame()
+    horse = pick_col(df, ["경주마명","마명","경주마"])
+    jockey = pick_col(df, ["기수명","기수"])
+    num = pick_col(df, ["마번","번호"])
+    dist = pick_col(df, ["거리"])
+    weight = pick_col(df, ["부담중량","중량"])
+    odds = pick_col(df, ["배당률","단승","배당"])
+    rank = pick_col(df, ["순위","착순","도착순"])
+    race_no = pick_col(df, ["경주번호","경주"])
+    if horse: out["경주마"] = df[horse].astype(str)
+    if jockey: out["기수"] = df[jockey].astype(str)
+    if num:
+        out["마번"] = pd.to_numeric(df[num].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
+        out["줄"] = out["마번"].apply(lambda x: f"{int(x)}째줄" if pd.notna(x) else "")
+    if dist: out["거리"] = pd.to_numeric(df[dist].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
+    if weight: out["부담중량"] = pd.to_numeric(df[weight].astype(str).str.extract(r"(\d+\.?\d*)")[0], errors="coerce")
+    if odds: out["배당률"] = pd.to_numeric(df[odds].astype(str).str.extract(r"(\d+\.?\d*)")[0], errors="coerce")
+    if rank: out["순위"] = pd.to_numeric(df[rank].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
+    if race_no: out["경주번호"] = pd.to_numeric(df[race_no].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
+    if len(out):
+        out["경마장"] = course
+        out["경주일"] = pd.to_datetime(datetime.today().date())
+        defaults = {"직전순위": None, "지지난순위": None, "나이": None, "성별":"", "부마":"", "모마":"",
+            "혈통점수": 55, "기수승률": 55, "기수복승률": 55, "최근3경주평균순위": None,
+            "최근5경주평균순위": None, "최근승률": 55, "지구력점수": 55, "스피드점수": 55,
+            "순발력점수":55, "막판추입점수":55, "트랙적성": 60, "거리적성":60,
+            "컨디션점수":55, "훈련점수":55, "출전간격일":21, "체중증감":0, "주로상태적성":60}
+        for c,v in defaults.items():
+            out[c] = v
+    return out
+
+def live_fetch(courses, kinds):
+    result = {}
+    pieces = []
+    for course in courses:
+        result[course] = {}
+        for kind in kinds:
+            res = fetch_html_tables(KRA_URLS[course][kind])
+            result[course][kind] = res
+            if res["ok"]:
+                for t in res["tables"]:
+                    n = normalize_kra_table(course, t)
+                    if len(n) and "경주마" in n.columns:
+                        pieces.append(n)
+    live_df = pd.concat(pieces, ignore_index=True).drop_duplicates() if pieces else pd.DataFrame()
+    return result, live_df
+
+def detect_changes(prev, curr):
+    prev = ensure_columns(prev) if len(prev) else pd.DataFrame()
+    curr = ensure_columns(curr) if len(curr) else pd.DataFrame()
+    if prev.empty or curr.empty:
+        return pd.DataFrame(columns=["구분","경마장","경주마","항목","이전","현재","상태"])
+    key_cols = ["경마장","경주번호","경주마"]
+    changes = []
+    p = prev.set_index(key_cols, drop=False)
+    c = curr.set_index(key_cols, drop=False)
+    for key, row in c.iterrows():
+        if key not in p.index:
+            changes.append(["신규", row.get("경마장",""), row.get("경주마",""), "출전", "-", "신규", "변경"])
+            continue
+        old = p.loc[key]
+        if isinstance(old, pd.DataFrame): old = old.iloc[0]
+        for col, label in [("기수","기수"),("마번","마번"),("줄","줄"),("거리","트랙/거리"),("부담중량","부담중량"),("배당률","배당률"),("순위","순위")]:
+            ov, nv = old.get(col), row.get(col)
+            if str(ov) != str(nv) and not (pd.isna(ov) and pd.isna(nv)):
+                changes.append(["변경", row.get("경마장",""), row.get("경주마",""), label, ov, nv, "즉시 재분석"])
+    for key, row in p.iterrows():
+        if key not in c.index:
+            changes.append(["삭제", row.get("경마장",""), row.get("경주마",""), "출전", "있음", "삭제/누락", "확인"])
+    return pd.DataFrame(changes, columns=["구분","경마장","경주마","항목","이전","현재","상태"])
+
+def monthly_analysis(engine_df, days=31):
+    max_date = engine_df["경주일"].max()
+    if pd.isna(max_date): max_date = pd.Timestamp.today()
+    start = max_date - pd.Timedelta(days=days)
+    month = engine_df[(engine_df["경주일"] >= start) & (engine_df["경주일"] <= max_date)].copy()
+    winners = month[month["순위"] == 1].copy().sort_values("경주일", ascending=False)
+    pattern = {}
+    if len(winners):
+        pattern = {
+            "우승마수": len(winners),
+            "평균지지난순위": winners["지지난순위"].mean(),
+            "평균직전순위": winners["직전순위"].mean(),
+            "평균트랙적성": winners["트랙적성"].mean(),
+            "평균컨디션": winners["컨디션점수"].mean(),
+            "평균스피드": winners["스피드점수"].mean(),
+            "평균지구력": winners["지구력점수"].mean(),
+            "평균출전간격": winners["출전간격일"].mean(),
+        }
+    return month, winners, pattern, start, max_date
+
+def sms_text(best):
+    if best is None:
+        return "[MARU 경마AI] 추천 데이터 없음"
+    horse_no = int(best["마번"]) if pd.notna(best["마번"]) else ""
+    return (f"[MARU 경마AI 최종통합]\n유력 1위: {best['경주마']}\n경마장: {best['경마장']} / {best['경주번호']}경주\n마번/줄: {horse_no}번 / {best['줄']}\n최종점수: {best['최종추천점수']}\n등급: {best['추천등급']} / {best['리스크등급']}\n강점: {best['선정이유']}\n변경요인: {best['한달변경요인']}\n공식 페이지에서 직접 확인 후 수동구매")
+
+def clean_phone(p):
+    return "".join(ch for ch in str(p) if ch.isdigit())
+
+def send_sms_solapi(api_key, api_secret, from_phone, to_phone, text):
+    try:
+        from solapi import SolapiMessageService
+        from solapi.model import RequestMessage
+    except Exception:
+        return False, "solapi 패키지가 없습니다. requirements.txt에 포함되어 있지만 설치가 실패했을 수 있습니다."
+    try:
+        service = SolapiMessageService(api_key=api_key, api_secret=api_secret)
+        msg = RequestMessage(from_=from_phone, to=to_phone, text=text)
+        res = service.send(msg)
+        return True, f"문자 발송 요청 완료: {res}"
+    except Exception as e:
+        return False, f"문자 발송 실패: {e}"
+
+# Sidebar
+st.sidebar.title("🌐 실시간/클라우드 설정")
+auto_refresh = st.sidebar.checkbox("자동 새로고침", value=False)
+refresh_sec = st.sidebar.selectbox("새로고침 간격", [30, 45, 60, 120, 300], index=1)
+target_courses = st.sidebar.multiselect("수집 경마장", list(KRA_URLS.keys()), default=list(KRA_URLS.keys()))
+target_kinds = st.sidebar.multiselect("수집 종류", ["main","entry","score"], default=["main","entry"])
+apply_live = st.sidebar.checkbox("수집 결과 즉시 분석", value=True)
+
+st.sidebar.markdown("---")
+official_link = st.sidebar.text_input("공식 구매/확인 페이지 링크", value="https://race.kra.co.kr/")
+unit_amount = st.sidebar.number_input("1회 수동구매 기준금액", 1000, 100000, 10000, 1000)
+daily_budget = st.sidebar.number_input("오늘 예산", 10000, 1000000, 30000, 10000)
+
+st.sidebar.markdown("---")
+sms_enabled = st.sidebar.checkbox("SOLAPI 문자 발송 사용", value=False)
+sms_test = st.sidebar.checkbox("문자 테스트 모드", value=True)
+api_key = st.sidebar.text_input("SOLAPI API Key", type="password")
+api_secret = st.sidebar.text_input("SOLAPI API Secret", type="password")
+sms_from = clean_phone(st.sidebar.text_input("발신번호", placeholder="01012345678"))
+sms_to = clean_phone(st.sidebar.text_input("수신번호", placeholder="01012345678"))
+
+base_weights = {"기수엔진":10,"혈통엔진":8,"나이엔진":5,"최근성적엔진":14,"스피드엔진":9,"지구력엔진":9,"트랙엔진":9,"거리엔진":10,"부담중량엔진":6,"컨디션엔진":10,"체중변화엔진":4,"배당안정성엔진":4,"코스전략엔진":12,"상승세엔진":10}
+with st.sidebar.expander("엔진 가중치 조절"):
+    raw = {k: st.slider(k.replace("엔진",""), 0, 25, v) for k,v in base_weights.items()}
+total = sum(raw.values()) or 1
+weights = {k:v/total for k,v in raw.items()}
+
+if auto_refresh:
+    time.sleep(refresh_sec)
+    st.rerun()
+
+st.markdown('<div class="main-title">🐎 MARU KRA FINAL TOTAL AI V13.00</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">실시간 수집 + 변경감지 + 엔진핵심 + 한달 우승원인 + 문자 + 모바일 수동구매 + 클라우드/로컬 실행 통합판</div>', unsafe_allow_html=True)
+
+btn1, btn2, btn3, btn4 = st.columns(4)
+with btn1:
+    fetch_now = st.button("🌐 실시간 수집/재분석")
+with btn2:
+    if st.button("🔄 샘플 복구"):
+        st.session_state.previous_df = st.session_state.df.copy()
+        st.session_state.df = sample_data.copy()
+        st.session_state.last_fetch_status = "샘플 복구"
+        add_log("샘플 데이터 복구")
+        st.rerun()
+with btn3:
+    send_sms_now = st.button("📱 문자 문구/발송")
+with btn4:
+    st.download_button("📂 샘플 CSV", data=sample_data.to_csv(index=False).encode("utf-8-sig"), file_name="maru_kra_final_sample.csv", mime="text/csv")
+
+if fetch_now:
+    with st.spinner("KRA 실시간 표 수집 중..."):
+        old_df = st.session_state.df.copy()
+        raw_tables, live_df = live_fetch(target_courses, target_kinds)
+        st.session_state.live_tables = raw_tables
+        st.session_state.previous_df = old_df
+        if apply_live and len(live_df):
+            st.session_state.df = live_df
+            st.session_state.last_fetch_status = f"성공: {len(live_df)}행 수집/분석 적용"
+            add_log(st.session_state.last_fetch_status)
+        else:
+            st.session_state.last_fetch_status = "원본표 수집 완료, 정규화 데이터 없음 또는 적용 꺼짐"
+            add_log(st.session_state.last_fetch_status)
+        st.session_state.last_refresh = datetime.now().strftime("%H:%M:%S")
+        st.rerun()
+
+df = ensure_columns(st.session_state.df)
+engine_df = run_engine(df, weights)
+best = engine_df.iloc[0] if len(engine_df) else None
+changes_df = detect_changes(st.session_state.previous_df, st.session_state.df)
+month_df, winners_df, pattern, start_date, end_date = monthly_analysis(engine_df, 31)
+
+if send_sms_now:
+    text = sms_text(best)
+    st.session_state.last_sms = text
+    if not sms_enabled or sms_test:
+        st.info("테스트 모드 또는 문자 발송 비활성입니다. 실제 발송 없이 문구만 생성했습니다.")
+        add_log("문자 문구 생성")
+    else:
+        if not (api_key and api_secret and sms_from and sms_to):
+            st.error("SOLAPI Key/Secret, 발신번호, 수신번호를 입력하세요.")
+            add_log("문자 발송 실패: 설정 부족")
+        else:
+            ok, msg = send_sms_solapi(api_key, api_secret, sms_from, sms_to, text)
+            st.success(msg) if ok else st.error(msg)
+            add_log(msg)
+
+if best is not None:
+    horse_no = int(best["마번"]) if pd.notna(best["마번"]) else ""
+    st.markdown(f"""
+    <div class="score-box">
+        <div class="small-note">최종 통합엔진 추천</div>
+        <div style="font-size:38px; font-weight:900; color:#ffd84d;">🏆 1위 추천: {best['경주마']}</div>
+        <div style="font-size:18px;">
+            경마장: <b>{best['경마장']}</b> ｜ 경주번호: <b>{best['경주번호']}</b><br>
+            마번/줄: <b>{horse_no}번 / {best['줄']}</b><br>
+            최종추천점수: <b>{best['최종추천점수']}</b>점 ｜ 리스크방어: <b>{best['리스크방어점수']}</b>점<br>
+            추천등급: <b>{best['추천등급']}</b> ｜ 리스크등급: <b>{best['리스크등급']}</b><br>
+            핵심 강점: <b>{best['선정이유']}</b><br>
+            변경요인: <b>{best['한달변경요인']}</b>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown(f'<a class="buy-link" href="{official_link}" target="_blank">📱 공식 구매/확인 페이지 열기</a>', unsafe_allow_html=True)
+
+m1,m2,m3,m4,m5 = st.columns(5)
+m1.metric("실시간 상태", st.session_state.last_fetch_status)
+m2.metric("마지막 갱신", st.session_state.last_refresh or "대기")
+m3.metric("변경 감지", f"{len(changes_df)}건")
+m4.metric("한달 우승마", f"{len(winners_df)}두")
+m5.metric("분석 데이터", f"{len(engine_df)}행")
+
+st.markdown("### 🏆 추천 TOP 3")
+cols3 = st.columns(3)
+for idx, (_, row) in enumerate(engine_df.head(3).iterrows()):
+    with cols3[idx]:
+        horse_no = int(row["마번"]) if pd.notna(row["마번"]) else ""
+        color = "#ffd84d" if idx == 0 else "#eeeeee"
+        st.markdown(f"""
+        <div class="card">
+            <div style="font-size:24px; font-weight:900; color:{color};">{idx+1}위 {row['경주마']}</div>
+            <div>마번/줄: <b>{horse_no}번 / {row['줄']}</b></div>
+            <div>최종점수: <b>{row['최종추천점수']}</b></div>
+            <div>등급: <b>{row['추천등급']}</b></div>
+            <div>강점: <b>{row['선정이유']}</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+st.markdown("### 🧠 1위 경주마 엔진 점수")
+if best is not None:
+    items = [("기수",best["기수엔진"],"#2277ff"),("혈통",best["혈통엔진"],"#8c5cff"),("최근성적",best["최근성적엔진"],"#16d93a"),("스피드",best["스피드엔진"],"#ff4040"),("지구력",best["지구력엔진"],"#ffaa00"),("트랙",best["트랙엔진"],"#00a9a5"),("거리",best["거리엔진"],"#ffd22e"),("컨디션",best["컨디션엔진"],"#44d7ff"),("상승세",best["상승세엔진"],"#ffffff"),("리스크방어",best["리스크방어점수"],"#dddddd")]
+    ecs = st.columns(5)
+    for i,(name,val,color) in enumerate(items):
+        pct = max(0, min(100, float(val)))
+        with ecs[i%5]:
+            st.markdown(f'<div class="engine-card"><div class="engine-name" style="color:{color};">{name}엔진</div><div class="engine-desc">{pct:.1f}점</div><div class="bar-shell"><div class="bar-fill" style="width:{pct}%; background:{color};"></div></div></div>', unsafe_allow_html=True)
+
+st.markdown("### ✅ 수동구매 체크")
+c1,c2 = st.columns(2)
+with c1:
+    checked_horse = st.checkbox("추천 경주마/마번 확인")
+    checked_change = st.checkbox("실시간 변경사항/한달원인 확인")
+with c2:
+    checked_amount = st.checkbox(f"금액 {unit_amount:,}원 확인")
+    checked_manual = st.checkbox("공식 페이지에서 직접 수동 구매")
+
+if st.button("✅ 수동구매 기록"):
+    if checked_horse and checked_change and checked_amount and checked_manual:
+        if st.session_state.today_spent + unit_amount > daily_budget:
+            st.error("오늘 예산을 초과합니다.")
+            add_log("예산 초과 차단")
+        else:
+            st.session_state.today_spent += unit_amount
+            st.session_state.buy_count += 1
+            st.success("수동구매 기록 완료")
+            add_log(f"수동구매 기록 {unit_amount:,}원")
+    else:
+        st.warning("체크리스트를 모두 확인하세요.")
+
+b1,b2,b3 = st.columns(3)
+b1.metric("오늘 예산", f"{daily_budget:,}원")
+b2.metric("기록 금액", f"{st.session_state.today_spent:,}원")
+b3.metric("남은 예산", f"{daily_budget - st.session_state.today_spent:,}원")
+
+st.markdown("---")
+
+tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9 = st.tabs(["🌐 실시간원본","🔁 변경감지","🏆 최종추천","🧠 엔진상세","📅 한달우승원인","📂 CSV","📩 문자","🧾 로그","📘 사용법"])
+
+with tab1:
+    st.subheader("KRA 실시간 원본 표")
+    if not st.session_state.live_tables:
+        st.info("상단의 '실시간 수집/재분석' 버튼을 누르세요.")
+    else:
+        for course, kinds in st.session_state.live_tables.items():
+            with st.expander(course, expanded=False):
+                for kind, res in kinds.items():
+                    st.write(f"**{kind}** / {'성공' if res.get('ok') else '실패'} / {res.get('url')}")
+                    if res.get("ok"):
+                        st.write(f"표 {res.get('count')}개")
+                        for i,t in enumerate(res.get("tables",[])[:4], start=1):
+                            st.write(f"표 {i}")
+                            st.dataframe(t, width="stretch")
+                    else:
+                        st.error(res.get("error"))
+with tab2:
+    st.subheader("기수 / 경주마 / 트랙거리 / 줄 변경 감지")
+    st.dataframe(changes_df, width="stretch") if len(changes_df) else st.info("변경 감지 없음 또는 이전 데이터가 없습니다.")
+with tab3:
+    cols = ["경주일","경마장","경주번호","경주마","마번","줄","최종추천점수","추천등급","리스크등급","선정이유","한달변경요인","기수","거리","부담중량","배당률"]
+    st.dataframe(engine_df[cols], width="stretch")
+with tab4:
+    cols = ["경주마","마번","줄","최종추천점수","기수엔진","혈통엔진","나이엔진","최근성적엔진","스피드엔진","지구력엔진","트랙엔진","거리엔진","부담중량엔진","컨디션엔진","체중변화엔진","배당안정성엔진","코스전략엔진","상승세엔진","리스크방어점수"]
+    st.dataframe(engine_df[cols], width="stretch")
+    st.bar_chart(engine_df.head(6)[["경주마","최종추천점수"]], x="경주마", y="최종추천점수")
+with tab5:
+    st.subheader("한달 우승원인")
+    if len(winners_df):
+        cols = ["경주일","경마장","경주번호","경주마","마번","줄","지지난순위","직전순위","순위","한달변경요인","최종추천점수","트랙적성","컨디션점수","체중증감","출전간격일"]
+        st.dataframe(winners_df[cols], width="stretch")
+        if pattern:
+            p1,p2,p3,p4 = st.columns(4)
+            p1.metric("평균 지지난순위", f"{pattern['평균지지난순위']:.2f}위")
+            p2.metric("평균 직전순위", f"{pattern['평균직전순위']:.2f}위")
+            p3.metric("평균 트랙적성", f"{pattern['평균트랙적성']:.1f}")
+            p4.metric("평균 컨디션", f"{pattern['평균컨디션']:.1f}")
+    else:
+        st.info("우승마 데이터가 없습니다.")
+with tab6:
+    st.write("KRA 표가 안 읽히면 CSV 업로드로 분석 가능합니다.")
+    st.code(",".join(COLUMNS))
+    up = st.file_uploader("CSV 업로드", type=["csv"])
+    if up:
+        try:
+            new_df = pd.read_csv(up)
+            if "경주일" in new_df.columns: new_df["경주일"] = pd.to_datetime(new_df["경주일"], errors="coerce")
+            if "마번" in new_df.columns and "줄" not in new_df.columns:
+                new_df["줄"] = pd.to_numeric(new_df["마번"], errors="coerce").apply(lambda x: f"{int(x)}째줄" if pd.notna(x) else "")
+            st.session_state.previous_df = st.session_state.df.copy()
+            st.session_state.df = new_df
+            add_log("CSV 업로드 분석 적용")
+            st.success("CSV 업로드 완료. 재분석합니다.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"CSV 오류: {e}")
+with tab7:
+    text = sms_text(best)
+    st.code(st.session_state.last_sms or text)
+    st.caption("SOLAPI 설정 후 사이드바에서 문자 발송을 켜면 실제 발송 가능합니다. 처음에는 테스트 모드로 확인하세요.")
+with tab8:
+    st.markdown(f'<div class="log-box">{st.session_state.log}</div>', unsafe_allow_html=True)
+with tab9:
+    st.markdown("""
+### 핸드폰 앱처럼 쓰기
+Streamlit Cloud에 배포하면 주소가 생깁니다.
+
+핸드폰 크롬에서 주소를 열고:
+1. 오른쪽 위 점 3개
+2. 홈 화면에 추가
+3. 이름: MARU 경마AI
+4. 홈화면 아이콘 누르면 바로 실행
+
+### 실시간 분석
+- `실시간 수집/재분석` 버튼을 누르면 KRA 표를 다시 읽습니다.
+- 자동 새로고침을 켜면 설정한 초마다 화면을 갱신합니다.
+- 기수, 마번, 줄, 거리, 부담중량, 배당률, 순위 변화가 있으면 변경감지 탭에 표시됩니다.
+- 변경사항 반영 후 즉시 엔진 재분석합니다.
+
+### 주의
+KRA 공식 페이지가 클라우드 서버 접속을 막거나 표 구조를 바꾸면 실시간 수집이 실패할 수 있습니다.
+그 경우 CSV 업로드로 분석하면 됩니다.
+""")
+
+st.warning("학습/분석 보조용입니다. 실제 경마 결과나 수익을 보장하지 않습니다. 자동구매 기능은 없습니다.")

@@ -1,0 +1,30 @@
+MARU KRA FINAL TOTAL AI 클라우드 배포 순서
+
+1. GitHub 계정 만들기
+2. 새 저장소 만들기
+   예: maru-kra-final-ai
+3. 이 폴더 파일 전체 업로드
+   - app.py
+   - requirements.txt
+   - .streamlit/config.toml
+   - assets/app_icon.png
+4. Streamlit Community Cloud 접속
+5. GitHub 로그인
+6. New app 클릭
+7. Repository 선택
+8. Main file path: app.py
+9. Deploy 클릭
+10. 주소 생성
+   예: https://maru-kra-final-ai.streamlit.app
+
+핸드폰 앱처럼 만들기:
+1. 핸드폰 크롬에서 배포 주소 열기
+2. 오른쪽 위 점 3개
+3. 홈 화면에 추가
+4. 이름: MARU 경마AI
+5. 홈화면 아이콘으로 실행
+
+주의:
+- KRA 공식 페이지가 클라우드 접속을 막으면 실시간 수집이 실패할 수 있습니다.
+- 그 경우 CSV 업로드 기능으로 분석 가능합니다.
+- 자동구매 기능은 없습니다.

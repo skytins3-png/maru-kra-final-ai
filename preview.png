@@ -1,0 +1,24 @@
+# MARU KRA FINAL TOTAL AI V13
+
+## 포함 기능
+- 실시간 KRA 표 수집
+- 기수/경주마/마번/줄/거리/부담중량/배당률/순위 변경 감지
+- 엔진핵심 분석
+- 한달 우승원인 분석
+- 문자 문구 생성 및 SOLAPI 문자 발송 준비
+- 모바일 수동구매 보조
+- 예산관리
+- CSV 업로드 fallback
+- 로컬 PC 아이콘 실행
+- Streamlit Cloud 배포
+
+## 실행
+install_requirements.bat
+run_dashboard.bat
+
+## 클라우드 배포
+DEPLOY_GUIDE.txt 참고
+
+
+## 수정사항
+- Streamlit 최신 width 방식 적용: `use_container_width`를 `width="stretch"`로 변경했습니다.
