@@ -1,252 +1,379 @@
+
 import streamlit as st
 import pandas as pd
-import numpy as np
-import requests
 
-st.set_page_config(page_title="MARU KRA AI", page_icon="🐎", layout="wide")
+st.set_page_config(page_title="MARU KRA AI", page_icon="🐎", layout="centered")
+
+if "page" not in st.session_state:
+    st.session_state.page = "home"
+
+st.sidebar.title("설정")
+kra_url = st.sidebar.text_input("KRA 공식 수동구매 URL", "https://m.kra.co.kr/main.do")
+
+data = {
+    "race": "서울 6R",
+    "start": "16:05",
+    "remain": "18분",
+    "decision": "소액 공격",
+    "main_combo": "5 - 11 - 2",
+    "odds": "46.8",
+    "confidence": "84",
+    "profit": "높음",
+    "hit": "보통+",
+    "defense1": "5 - 11 - 7",
+    "defense1_odds": "28.4",
+    "defense2": "5 - 2 - 11",
+    "defense2_odds": "34.6",
+}
+
+with st.sidebar.expander("표시값 수정", expanded=False):
+    for k in list(data.keys()):
+        data[k] = st.text_input(k, data[k])
 
 st.markdown("""
 <style>
-.stApp { background:#0f0f0f; color:#eeeeee; }
-.block-container { max-width:1500px; padding-top:1rem; }
-.main-title { border:1px solid #444; background:#1b1b1b; padding:14px; color:#fff; font-size:26px; font-weight:900; border-radius:12px; }
-.sub-title { border:1px solid #444; background:#171717; padding:10px; color:#d6d6d6; font-size:14px; font-weight:700; margin-bottom:12px; border-radius:10px; }
-.score-box { border:2px solid #ffd84d; background:#181818; padding:16px; border-radius:16px; margin-bottom:12px; }
-.card { border:1px solid #444; background:#151515; padding:14px; border-radius:14px; margin-bottom:8px; }
-a.buy-link { display:block; text-align:center; background:#ffcc00; color:#111; padding:15px; border-radius:14px; font-size:22px; font-weight:900; text-decoration:none; margin:10px 0; }
+.block-container {
+  max-width: 760px;
+  padding-top: 1.0rem;
+  padding-bottom: 2rem;
+}
+.header {
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  margin-bottom:18px;
+}
+.logo {
+  font-size:42px;
+  font-weight:1000;
+  color:#0f172a;
+  letter-spacing:.3px;
+  line-height:1.0;
+}
+.ai {
+  font-size:18px;
+  background:#2563eb;
+  color:#fff;
+  border-radius:8px;
+  padding:4px 8px;
+  vertical-align:middle;
+}
+.sub {
+  font-size:20px;
+  color:#0f766e;
+  font-weight:800;
+  margin-top:12px;
+  letter-spacing:1px;
+}
+.header-icons {
+  font-size:30px;
+  color:#0f172a;
+  padding-top:3px;
+}
+.main-card {
+  background: radial-gradient(circle at 78% 8%, #0f766e 0%, #064e3b 38%, #022c22 100%);
+  color:white;
+  border-radius:28px;
+  padding:28px;
+  margin: 8px 0 24px 0;
+  box-shadow:0 12px 30px rgba(2,44,34,.22);
+}
+.main-title {
+  font-size:24px;
+  font-weight:1000;
+  margin-bottom:28px;
+}
+.badge {
+  display:inline-block;
+  background:#16a34a;
+  color:white;
+  padding:9px 16px;
+  border-radius:12px;
+  font-size:20px;
+  font-weight:1000;
+}
+.time {
+  float:right;
+  color:#ecfdf5;
+  font-size:19px;
+  font-weight:900;
+  margin-top:8px;
+}
+.race-line {
+  font-size:24px;
+  color:#ecfdf5;
+  margin-top:28px;
+}
+.combo-row {
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-end;
+  margin-top:22px;
+}
+.combo {
+  font-size:62px;
+  font-weight:1000;
+  letter-spacing:2px;
+  line-height:1;
+}
+.odds {
+  font-size:56px;
+  font-weight:1000;
+  color:#facc15;
+  line-height:1;
+}
+.mini-grid {
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:14px;
+  margin-bottom:20px;
+}
+.mini-card {
+  background:white;
+  border:1px solid #e5e7eb;
+  border-radius:20px;
+  padding:20px 10px;
+  text-align:center;
+  box-shadow:0 4px 14px rgba(15,23,42,.08);
+}
+.mini-label {
+  font-size:19px;
+  color:#111827;
+  font-weight:800;
+}
+.mini-value {
+  font-size:34px;
+  color:#047857;
+  font-weight:1000;
+  margin-top:6px;
+}
+.box {
+  background:white;
+  border:1px solid #e5e7eb;
+  border-radius:22px;
+  padding:20px;
+  margin:16px 0;
+  color:#111827;
+  box-shadow:0 4px 14px rgba(15,23,42,.06);
+}
+.box-title {
+  font-size:24px;
+  font-weight:1000;
+  margin-bottom:16px;
+}
+.def-line {
+  font-size:23px;
+  line-height:1.8;
+  display:flex;
+  gap:50px;
+}
+.hidden-grid {
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:16px;
+  text-align:center;
+  color:#475569;
+  font-size:18px;
+  margin-top:16px;
+}
+.buy-note {
+  text-align:center;
+  color:#64748b;
+  font-size:15px;
+  margin-top:10px;
+  margin-bottom:22px;
+}
+.hub-card {
+  background:white;
+  border:1px solid #e5e7eb;
+  border-radius:20px;
+  padding:18px 22px;
+  margin-top:16px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  box-shadow:0 4px 12px rgba(15,23,42,.05);
+}
+.hub-title {
+  font-size:24px;
+  font-weight:1000;
+  color:#0f172a;
+}
+.hub-sub {
+  color:#64748b;
+  font-size:16px;
+  margin-top:4px;
+}
+.safe {
+  border:1px solid #bfdbfe;
+  background:#eff6ff;
+  color:#1e3a8a;
+  border-radius:18px;
+  padding:16px;
+  margin:12px 0;
+  font-weight:900;
+}
+.step {
+  background:white;
+  border:1px solid #e5e7eb;
+  border-radius:18px;
+  padding:14px;
+  margin:10px 0;
+}
+.num {
+  display:inline-block;
+  background:#047857;
+  color:white;
+  width:30px;
+  height:30px;
+  line-height:30px;
+  text-align:center;
+  border-radius:50%;
+  font-weight:1000;
+  margin-right:8px;
+}
+.stButton > button {
+  background:#0b5cff;
+  color:white;
+  font-size:22px;
+  font-weight:1000;
+  border-radius:18px;
+  height:64px;
+}
+@media(max-width: 700px) {
+  .combo {font-size:48px;}
+  .odds {font-size:42px;}
+  .mini-grid {gap:8px;}
+  .mini-label {font-size:16px;}
+  .mini-value {font-size:28px;}
+  .hidden-grid {font-size:15px; gap:10px;}
+}
 </style>
 """, unsafe_allow_html=True)
 
-KRA_URLS = {
-    "서울경마공원": "https://race.kra.co.kr/",
-    "부산경남경마공원": "https://race.kra.co.kr/busanMain.do",
-    "제주경마공원": "https://race.kra.co.kr/jejuMain.do",
-}
-
-sample = pd.DataFrame([
-    ["2026-06-02","서울경마공원",1,"번개질주",1,"1째줄","김철수",1200,55,3.2,2,1,1,86,91,78,90,84,-1,14],
-    ["2026-06-02","서울경마공원",1,"태양왕",2,"2째줄","이영호",1200,56,5.1,1,3,3,78,84,72,79,78,2,21],
-    ["2026-06-06","부산경남경마공원",6,"백호질주",5,"5째줄","이영호",1800,55.5,2.8,1,2,1,88,79,91,89,87,-2,18],
-    ["2026-06-06","부산경남경마공원",6,"흑룡",4,"4째줄","최강준",1800,56.5,4.0,2,4,2,82,73,88,85,80,1,18],
-    ["2026-05-26","제주경마공원",4,"한라질주",8,"8째줄","오한라",1110,54,4.4,2,2,1,81,87,77,82,81,1,20],
-], columns=["경주일","경마장","경주번호","경주마","마번","줄","기수","거리","부담중량","배당률","직전순위","지지난순위","순위","혈통점수","스피드점수","지구력점수","거리적성","컨디션점수","체중증감","출전간격일"])
-sample["경주일"] = pd.to_datetime(sample["경주일"])
-
-if "df" not in st.session_state:
-    st.session_state.df = sample.copy()
-if "prev_df" not in st.session_state:
-    st.session_state.prev_df = pd.DataFrame()
-if "spent" not in st.session_state:
-    st.session_state.spent = 0
-if "last_status" not in st.session_state:
-    st.session_state.last_status = "대기"
-
-def ensure(df):
-    data = df.copy()
-    for c in sample.columns:
-        if c not in data.columns:
-            data[c] = np.nan
-    data["경주일"] = pd.to_datetime(data["경주일"], errors="coerce")
-    for c in ["경주번호","마번","거리","부담중량","배당률","직전순위","지지난순위","순위","혈통점수","스피드점수","지구력점수","거리적성","컨디션점수","체중증감","출전간격일"]:
-        data[c] = pd.to_numeric(data[c], errors="coerce")
-    data["줄"] = data.apply(lambda r: r["줄"] if pd.notna(r["줄"]) and str(r["줄"]).strip() else (f"{int(r['마번'])}째줄" if pd.notna(r["마번"]) else ""), axis=1)
-    return data
-
-def norm(s, high=True, default=55):
-    s = pd.to_numeric(s, errors="coerce")
-    if s.notna().sum() == 0:
-        return pd.Series([default]*len(s), index=s.index)
-    mn, mx = s.min(), s.max()
-    if mn == mx:
-        return pd.Series([default]*len(s), index=s.index)
-    v = (s-mn)/(mx-mn)*100
-    return (v if high else 100-v).fillna(default)
-
-def change_factor(row):
-    r = []
-    if pd.notna(row["지지난순위"]) and pd.notna(row["직전순위"]) and row["직전순위"] < row["지지난순위"]:
-        r.append(f"지지난 {int(row['지지난순위'])}위→직전 {int(row['직전순위'])}위 상승")
-    if pd.notna(row["직전순위"]) and pd.notna(row["순위"]) and row["순위"] < row["직전순위"]:
-        r.append(f"직전 {int(row['직전순위'])}위→이번 {int(row['순위'])}위 상승")
-    if pd.notna(row["체중증감"]) and abs(row["체중증감"]) <= 2:
-        r.append("체중 안정")
-    if pd.notna(row["출전간격일"]) and 14 <= row["출전간격일"] <= 28:
-        r.append("출전간격 안정")
-    if pd.notna(row["컨디션점수"]) and row["컨디션점수"] >= 80:
-        r.append("컨디션 양호")
-    return " / ".join(r) if r else "종합점수 기준"
-
-def engine(df):
-    data = ensure(df)
-    data["기수엔진"] = norm(data["기수"].astype(str).map(data.groupby("기수")["순위"].mean()), high=False, default=55)
-    data["혈통엔진"] = data["혈통점수"].fillna(55)
-    data["스피드엔진"] = data["스피드점수"].fillna(55)
-    data["지구력엔진"] = data["지구력점수"].fillna(55)
-    data["거리엔진"] = data["거리적성"].fillna(55)
-    data["컨디션엔진"] = data["컨디션점수"].fillna(55)
-    data["부담중량엔진"] = norm(data["부담중량"], high=False, default=55)
-    data["배당안정엔진"] = norm(data["배당률"], high=False, default=55)
-    data["상승세엔진"] = data.apply(lambda r: 50 + (r["직전순위"] - r["순위"])*10 if pd.notna(r["직전순위"]) and pd.notna(r["순위"]) else 55, axis=1).clip(0,100)
-    data["최종추천점수"] = (data["기수엔진"]*.10 + data["혈통엔진"]*.10 + data["스피드엔진"]*.12 + data["지구력엔진"]*.12 + data["거리엔진"]*.12 + data["컨디션엔진"]*.14 + data["부담중량엔진"]*.08 + data["배당안정엔진"]*.07 + data["상승세엔진"]*.15).round(2)
-    data["리스크방어"] = ((data["컨디션엔진"] + data["부담중량엔진"] + data["배당안정엔진"]) / 3).round(2)
-    data["추천등급"] = data["최종추천점수"].apply(lambda x: "강추천" if x >= 78 else "추천" if x >= 70 else "관찰" if x >= 62 else "보류")
-    data["변경요인"] = data.apply(change_factor, axis=1)
-    return data.sort_values("최종추천점수", ascending=False)
-
-def detect(prev, curr):
-    if prev.empty:
-        return pd.DataFrame(columns=["구분","경주마","항목","이전","현재"])
-    p = ensure(prev).set_index(["경마장","경주번호","경주마"], drop=False)
-    c = ensure(curr).set_index(["경마장","경주번호","경주마"], drop=False)
-    out = []
-    for key, row in c.iterrows():
-        if key not in p.index:
-            out.append(["신규", row["경주마"], "출전", "-", "신규"])
-            continue
-        old = p.loc[key]
-        if isinstance(old, pd.DataFrame):
-            old = old.iloc[0]
-        for col in ["기수","마번","줄","거리","부담중량","배당률","순위"]:
-            if str(old.get(col)) != str(row.get(col)):
-                out.append(["변경", row["경주마"], col, old.get(col), row.get(col)])
-    return pd.DataFrame(out, columns=["구분","경주마","항목","이전","현재"])
-
-@st.cache_data(ttl=60)
-def try_fetch(url):
-    try:
-        res = requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"})
-        res.raise_for_status()
-        tables = pd.read_html(res.text)
-        return True, tables[:3], ""
-    except Exception as e:
-        return False, [], str(e)
-
-st.sidebar.title("설정")
-budget = st.sidebar.number_input("오늘 예산", 10000, 1000000, 30000, 10000)
-unit = st.sidebar.number_input("1회 기준금액", 1000, 100000, 10000, 1000)
-official = st.sidebar.text_input("공식 페이지", "https://race.kra.co.kr/")
-course = st.sidebar.selectbox("실시간 확인 경마장", list(KRA_URLS.keys()))
-
-st.markdown('<div class="main-title">🐎 MARU KRA AI 클라우드 안정판</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">현장 핸드폰 접속용 / 최종추천 / 변경감지 / 한달 우승원인 / CSV 분석 / 수동구매 보조</div>', unsafe_allow_html=True)
-
-c1, c2, c3 = st.columns(3)
-with c1:
-    if st.button("🌐 실시간 원본 확인"):
-        ok, tables, err = try_fetch(KRA_URLS[course])
-        st.session_state.last_status = "성공" if ok else f"실패: {err}"
-        st.session_state.raw_tables = tables
-with c2:
-    if st.button("🔄 샘플 복구"):
-        st.session_state.prev_df = st.session_state.df.copy()
-        st.session_state.df = sample.copy()
-        st.session_state.last_status = "샘플 복구"
-with c3:
-    st.download_button("📂 샘플 CSV", sample.to_csv(index=False).encode("utf-8-sig"), "maru_kra_sample.csv", "text/csv")
-
-ranked = engine(st.session_state.df)
-best = ranked.iloc[0] if len(ranked) else None
-changes = detect(st.session_state.prev_df, st.session_state.df)
-
-if best is not None:
-    st.markdown(f"""
-    <div class="score-box">
-    <div style="font-size:36px; font-weight:900; color:#ffd84d;">🏆 1위 추천: {best['경주마']}</div>
-    <div style="font-size:18px;">
-    경마장: <b>{best['경마장']}</b> / 경주번호: <b>{best['경주번호']}</b><br>
-    마번/줄: <b>{int(best['마번']) if pd.notna(best['마번']) else ''}번 / {best['줄']}</b><br>
-    최종추천점수: <b>{best['최종추천점수']}</b>점 / 리스크방어: <b>{best['리스크방어']}</b>점<br>
-    추천등급: <b>{best['추천등급']}</b><br>
-    변경요인: <b>{best['변경요인']}</b>
-    </div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.markdown(f'<a class="buy-link" href="{official}" target="_blank">📱 공식 구매/확인 페이지 열기</a>', unsafe_allow_html=True)
-
-m1,m2,m3,m4 = st.columns(4)
-m1.metric("현재상태", st.session_state.last_status)
-m2.metric("변경감지", f"{len(changes)}건")
-m3.metric("분석데이터", f"{len(ranked)}행")
-m4.metric("남은예산", f"{budget-st.session_state.spent:,}원")
-
-st.subheader("추천 TOP 3")
-cols = st.columns(3)
-for i, (_, r) in enumerate(ranked.head(3).iterrows()):
-    with cols[i]:
-        st.markdown(f"<div class='card'><b>{i+1}위 {r['경주마']}</b><br>마번/줄: {int(r['마번']) if pd.notna(r['마번']) else ''}번 / {r['줄']}<br>점수: {r['최종추천점수']}<br>등급: {r['추천등급']}<br>이유: {r['변경요인']}</div>", unsafe_allow_html=True)
-
-st.subheader("수동구매 체크")
-a,b = st.columns(2)
-with a:
-    ch1 = st.checkbox("추천 경주마/마번 확인")
-    ch2 = st.checkbox("추천 이유와 변경사항 확인")
-with b:
-    ch3 = st.checkbox(f"금액 {unit:,}원 확인")
-    ch4 = st.checkbox("공식 페이지에서 직접 수동구매")
-
-if st.button("✅ 수동구매 기록"):
-    if ch1 and ch2 and ch3 and ch4:
-        if st.session_state.spent + unit > budget:
-            st.error("오늘 예산 초과입니다.")
-        else:
-            st.session_state.spent += unit
-            st.success("수동구매 기록 완료")
-    else:
-        st.warning("체크를 모두 확인하세요.")
-
-tabs = st.tabs(["🏆 최종추천", "🔁 변경감지", "🧠 추천이유", "📅 한달우승원인", "🌐 실시간원본", "📂 CSV", "📩 문자문구", "📘 쉬운사용법"])
-with tabs[0]:
-    st.dataframe(ranked[["경마장","경주번호","경주마","마번","줄","최종추천점수","추천등급","리스크방어","기수","거리","부담중량","배당률","변경요인"]], width="stretch")
-with tabs[1]:
-    st.dataframe(changes, width="stretch")
-with tabs[2]:
-    st.dataframe(ranked[["경주마","기수엔진","혈통엔진","스피드엔진","지구력엔진","거리엔진","컨디션엔진","부담중량엔진","배당안정엔진","상승세엔진","최종추천점수"]], width="stretch")
-with tabs[3]:
-    winners = ranked[ranked["순위"] == 1]
-    st.dataframe(winners[["경주일","경마장","경주마","지지난순위","직전순위","순위","변경요인","최종추천점수"]], width="stretch")
-with tabs[4]:
-    st.write("한국마사회 페이지가 클라우드에서 막히면 실패할 수 있습니다. 실패 시 CSV 업로드를 쓰세요.")
-    if "raw_tables" in st.session_state:
-        for i, t in enumerate(st.session_state.raw_tables, start=1):
-            st.write(f"원본표 {i}")
-            st.dataframe(t, width="stretch")
-with tabs[5]:
-    up = st.file_uploader("CSV 업로드", type=["csv"])
-    if up:
-        new_df = pd.read_csv(up)
-        st.session_state.prev_df = st.session_state.df.copy()
-        st.session_state.df = new_df
-        st.success("CSV 업로드 완료. 새로고침하면 반영됩니다.")
-        st.rerun()
-with tabs[6]:
-    if best is not None:
-        msg = f"""[MARU 경마AI]
-유력 1위: {best['경주마']}
-경마장: {best['경마장']} / {best['경주번호']}경주
-마번/줄: {int(best['마번']) if pd.notna(best['마번']) else ''}번 / {best['줄']}
-점수: {best['최종추천점수']}
-등급: {best['추천등급']}
-이유: {best['변경요인']}
-공식 페이지에서 직접 확인 후 수동구매"""
-        st.code(msg)
-with tabs[7]:
+def render_home():
     st.markdown("""
-### 쉬운 사용 순서
-1. 먼저 `🏆 최종추천`을 봅니다.
-2. `🔁 변경감지`에서 기수, 마번, 줄, 거리 변화가 있는지 봅니다.
-3. `🧠 추천이유`에서 왜 추천했는지 봅니다.
-4. `📱 공식 구매/확인 페이지 열기`를 누릅니다.
-5. 공식 페이지에서 직접 확인 후 수동구매합니다.
-6. 구매했으면 `✅ 수동구매 기록`을 누릅니다.
+<div class="header">
+  <div>
+    <div class="logo">MARU KRA <span class="ai">AI</span></div>
+    <div class="sub">SIMPLE FINAL ONLY</div>
+  </div>
+  <div class="header-icons">🔔 ☰</div>
+</div>
+""", unsafe_allow_html=True)
 
-### 메뉴 뜻
-- 최종추천: 오늘 유력마 순위
-- 변경감지: 바뀐 내용
-- 추천이유: 엔진 점수
-- 한달우승원인: 과거 우승 흐름
-- 실시간원본: 한국마사회 원본표 확인
-- CSV: 직접 자료 올리기
-- 문자문구: 핸드폰으로 보낼 요약문
-""")
+    st.markdown(f"""
+<div class="main-card">
+  <div class="main-title">🎯 분석은 숨김 · 최종 결과만</div>
+  <span class="badge">🎯 {data['decision']}</span>
+  <span class="time">🕘 출발까지 {data['remain']}</span>
+  <div class="race-line">{data['race']} · 출발 {data['start']}</div>
+  <div class="combo-row">
+    <div class="combo">{data['main_combo']}</div>
+    <div class="odds">{data['odds']}배</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
-st.warning("분석 보조용입니다. 실제 결과나 수익을 보장하지 않습니다. 자동구매 기능은 없습니다.")
+    st.markdown(f"""
+<div class="mini-grid">
+  <div class="mini-card">
+    <div class="mini-label">🛡 신뢰도</div>
+    <div class="mini-value">{data['confidence']}%</div>
+  </div>
+  <div class="mini-card">
+    <div class="mini-label">📈 수익기대</div>
+    <div class="mini-value">{data['profit']}</div>
+  </div>
+  <div class="mini-card">
+    <div class="mini-label">🎯 적중기대</div>
+    <div class="mini-value">{data['hit']}</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown(f"""
+<div class="box">
+  <div class="box-title">🛡 방어 조합</div>
+  <div class="def-line"><span>1) {data['defense1']}</span><span>{data['defense1_odds']}배</span></div>
+  <div class="def-line"><span>2) {data['defense2']}</span><span>{data['defense2_odds']}배</span></div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("""
+<div class="box">
+  <div class="box-title">🔒 숨겨진 분석 <span style="float:right;font-size:17px;">접기 ^</span></div>
+  <div class="hidden-grid">
+    <div>🐴<br>말</div>
+    <div>🏇<br>기수</div>
+    <div>🧬<br>혈통</div>
+    <div>🌤<br>날씨</div>
+    <div>📊<br>배당</div>
+    <div>🛒<br>구매쏠림</div>
+    <div>🚫<br>블랙리스트</div>
+    <div>🧪<br>시뮬레이션</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    if st.button("↗ KRA 공식 수동구매 화면 열기", use_container_width=True):
+        st.session_state.page = "buy"
+        st.rerun()
+
+    st.markdown('<div class="buy-note">※ 자동구매 아님 · 직접 확인 후 수동구매</div>', unsafe_allow_html=True)
+
+    with st.expander("허브 보기", expanded=False):
+        st.caption("상세 분석은 접어서 필요할 때만 확인")
+        df = pd.DataFrame([
+            ["말", "최근5전 / 체중 / 게이트 분석"],
+            ["기수", "승률 / 흐름 / 기수교체 / 말궁합"],
+            ["혈통", "지역 / 날씨 / 거리 적성"],
+            ["배당", "구매쏠림 / 배당가치 / 배당흐름"],
+            ["블랙리스트", "반복 실패패턴 감점"],
+            ["시뮬레이션", "경주별 30~100회 반복 검증"],
+        ], columns=["분석", "내용"])
+        st.dataframe(df, use_container_width=True)
+
+def render_buy():
+    st.markdown("## ← KRA 공식 수동구매")
+    st.markdown("""
+<div class="safe">
+🔒 자동구매 아님 · 직접 확인 후 수동구매<br>
+본 화면은 자동구매를 실행하지 않습니다. KRA 공식 페이지에서 직접 구매합니다.
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown(f"""
+<div class="main-card">
+  <div style="font-size:34px;font-weight:1000;">{data['race']}</div>
+  <div style="font-size:19px;margin-top:8px;">출발 {data['start']} · 추천 조합</div>
+  <div style="font-size:54px;font-weight:1000;margin-top:20px;">{data['main_combo']}</div>
+  <div style="font-size:44px;font-weight:1000;color:#facc15;text-align:right;">{data['odds']}배</div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("### 구매 진행 안내")
+    steps = [
+        ("공식 구매창 열기", "아래 버튼을 눌러 KRA 공식 구매 페이지로 이동합니다."),
+        ("조합 확인", "선택한 조합이 정확한지 공식 구매창에서 다시 확인하세요."),
+        ("직접 금액 입력", "구매 금액을 직접 입력합니다."),
+        ("최종 확인 후 구매", "최종 내용을 확인한 뒤 구매를 완료합니다."),
+    ]
+    for i, (title, body) in enumerate(steps, 1):
+        st.markdown(f"""
+<div class="step">
+  <span class="num">{i}</span><b>{title}</b><br>
+  <span style="margin-left:40px;color:#475569;">{body}</span>
+</div>
+""", unsafe_allow_html=True)
+
+    st.link_button("↗ KRA 공식 구매 페이지로 이동", kra_url, use_container_width=True)
+
+    if st.button("대시보드로 돌아가기", use_container_width=True):
+        st.session_state.page = "home"
+        st.rerun()
+
+if st.session_state.page == "buy":
+    render_buy()
+else:
+    render_home()
