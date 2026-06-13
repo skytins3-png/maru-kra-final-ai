@@ -146,6 +146,56 @@ st.markdown("""
 def repl(url):
     return url.replace("{serviceKey}", api_key.strip()).replace("{today}", datetime.now().strftime("%Y%m%d"))
 
+
+def build_api_url(url):
+    """
+    기본 API 주소만 넣어도 자동으로 공공데이터 요청주소를 완성합니다.
+    예: https://apis.data.go.kr/B551015/API186_1
+    """
+    url = str(url or "").strip()
+    if not url:
+        return ""
+
+    key = str(api_key or "").strip()
+    ymd = datetime.now().strftime("%Y%m%d")
+
+    url = url.replace("{serviceKey}", key)
+    url = url.replace("{today}", ymd)
+    url = url.replace("{ymd}", ymd)
+
+    sep = "&" if "?" in url else "?"
+    extras = []
+    low = url.lower()
+
+    if "servicekey=" not in low and key:
+        extras.append("serviceKey=" + key)
+    if "pageno=" not in low:
+        extras.append("pageNo=1")
+    if "numofrows=" not in low:
+        extras.append("numOfRows=100")
+    if "resulttype=" not in low and "_type=" not in low and "type=" not in low:
+        extras.append("resultType=json")
+
+    # 자주 필요한 날짜값 자동 추가
+    if all(x not in low for x in ["rcdate=", "racedate=", "meetdate=", "stndate=", "date=", "ymd="]):
+        extras.append("rcDate=" + ymd)
+
+    # 자주 필요한 경마장값 자동 추가
+    if "meet=" not in low and "meetcd=" not in low and "rcourse=" not in low:
+        try:
+            meet_map = {"서울":"1", "제주":"2", "부산경남":"3"}
+            extras.append("meet=" + meet_map.get(track_place, "1"))
+        except Exception:
+            extras.append("meet=1")
+
+    if extras:
+        url = url + sep + "&".join(extras)
+
+    return url
+
+def replace_url(url):
+    return build_api_url(url)
+
 def json_to_df(x):
     if isinstance(x, dict):
         for path in [["response","body","items","item"],["response","body","item"],["items","item"],["data"],["result"]]:

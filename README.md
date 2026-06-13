@@ -1,33 +1,18 @@
-# MARU KRA REALTIME PRECISION MULTI API ENGINE
+# MARU KRA AUTO URL COMPLETE ENGINE
 
-다중 API 저장형 + 기상특보 + 코너별 통과순위/주로빠르기까지 추가한 실시간 세밀 분석 버전입니다.
+기본 API 주소만 넣어도 앱이 자동으로 요청주소를 완성하는 버전입니다.
 
-## 추가된 API 입력칸
-14. 기상특보 API URL
-15. 코너별 통과순위 / 주로빠르기 API URL
+예:
+https://apis.data.go.kr/B551015/API186_1
 
-## 핵심 기능
-- API URL 15개 입력
-- API 설정 저장 / 초기화
-- 새로고침 후에도 입력값 유지
-- 실시간 API 데이터 불러오기
-- 날씨/기상특보 위험 보정
-- 코너별 통과순위 / 주로빠르기 보정
-- 선행마/추입마/순위 뒤집힘 패턴 반영
-- 공격 삼쌍승
-- 방어 삼복승
-- 놓치기 아까운 삼쌍승
-- 추천 자동저장
-- 결과 저장
-- 예상 vs 실제 비교 저장
-- 하루 손실 -30,000원 투자금지
-- 하루 3회 / 30,000원 규칙
+자동으로 붙는 값:
+- serviceKey
+- pageNo=1
+- numOfRows=100
+- resultType=json
+- rcDate=오늘날짜
+- meet=경마장코드
 
-## 주의
-수익 보장 기능은 아닙니다. 자동구매도 없습니다.
-공식 KRA 화면으로 이동하여 사용자가 직접 확인하고 구매하는 구조입니다.
+그래도 API마다 필수 파라미터가 다를 수 있으니, 특정 API가 계속 HTTP 500이면 공공데이터 상세페이지의 미리보기 URL을 사용하세요.
 
-## GitHub 업로드
-압축 해제 후 아래 2개만 올리세요.
-- app.py
-- requirements.txt
+GitHub에는 app.py, requirements.txt 두 개만 올리면 됩니다.
