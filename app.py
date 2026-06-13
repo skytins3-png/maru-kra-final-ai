@@ -53,7 +53,9 @@ DEFAULT_SETTINGS = {
     "daily_loss_limit": 30000,
     "profit_unlock": 200000,
     "daily_budget": 30000,
-    "daily_entries_limit": 3
+    "daily_entries_limit": 3,
+    "target_rc_no": 6,
+    "target_date": ""
 }
 
 DEFAULT_WEIGHTS = {
@@ -168,7 +170,7 @@ weights = load_local_json(WEIGHT_FILE, DEFAULT_WEIGHTS)
 save_json(WEIGHT_FILE, weights)
 
 st.title("🐎 MARU KRA AI")
-st.caption("Secrets 자동불러오기 · chulNo 신뢰소스 우선 · age 마번 오인 방지")
+st.caption("Secrets 자동불러오기 · 선택 경주 필터 · rcDate/meet/rcNo 기준 분석")
 
 st.sidebar.header("MARU KRA 저장형")
 if any(secret_get(names, "") for names in SECRET_MAP.values()):
@@ -211,6 +213,20 @@ track_place = st.sidebar.selectbox(
     "경마장",
     places,
     index=places.index(settings.get("track_place", "서울")) if settings.get("track_place", "서울") in places else 0
+)
+
+
+target_date = st.sidebar.text_input(
+    "분석 날짜",
+    value=settings.get("target_date", "") or datetime.now().strftime("%Y%m%d"),
+    help="예: 20260614"
+)
+target_rc_no = st.sidebar.number_input(
+    "분석 경주번호",
+    min_value=1,
+    max_value=20,
+    value=int(settings.get("target_rc_no", 6)),
+    step=1
 )
 
 auto_weather = st.sidebar.checkbox("날씨/바람 자동수집", True)
@@ -263,7 +279,9 @@ def current_setting_payload():
         "daily_loss_limit": daily_loss_limit,
         "profit_unlock": profit_unlock,
         "daily_budget": daily_budget,
-        "daily_entries_limit": daily_entries_limit
+        "daily_entries_limit": daily_entries_limit,
+        "target_rc_no": int(target_rc_no),
+        "target_date": target_date
     }
 
 if st.sidebar.button("API 저장", use_container_width=True):
@@ -387,7 +405,7 @@ def fetch_env():
     return env
 
 def sample_data():
-    race = pd.DataFrame([{"경마장":track_place, "경주번호":"6", "출발시간":"16:05"}])
+    race = pd.DataFrame([{"경마장":track_place, "경주번호":str(int(target_rc_no)), "출발시간":"-"}])
     horse = pd.DataFrame([
         {"마번":5,"마명":"마루스피드","최근순위":2,"승률":18,"복승률":42,"부담중량":55,"예상배당":9.2,"레이팅":78,"레이팅변화":4,"선행력":82,"추입력":70,"파워":78,"순발력":84,"습주로":72,"모래적응":80},
         {"마번":11,"마명":"그린파워","최근순위":3,"승률":15,"복승률":38,"부담중량":54.5,"예상배당":7.8,"레이팅":75,"레이팅변화":2,"선행력":75,"추입력":78,"파워":82,"순발력":77,"습주로":80,"모래적응":83},
@@ -403,6 +421,71 @@ def sample_data():
         {"마번":3,"출발위험":2,"주행위험":1}
     ])
     return race, horse, risk
+
+
+def normalize_meet_value(x):
+    s = str(x or "").strip()
+    if s in ["1", "서울", "SEOUL", "Seoul"]:
+        return "서울"
+    if s in ["2", "제주", "JEJU", "Jeju"]:
+        return "제주"
+    if s in ["3", "부산경남", "부경", "BUSAN", "Busan", "부산"]:
+        return "부산경남"
+    return s
+
+def find_col_by_names(df, names):
+    if df is None or df.empty:
+        return None
+    lower = {str(c).lower(): c for c in df.columns}
+    for n in names:
+        if n.lower() in lower:
+            return lower[n.lower()]
+    for c in df.columns:
+        cl = str(c).lower()
+        for n in names:
+            if n.lower() in cl:
+                return c
+    return None
+
+def filter_one_api(df, key="api"):
+    """
+    rcDate / meet / rcNo 기준으로 선택 경주만 남깁니다.
+    해당 컬럼이 없는 API는 그대로 두되, 있는 컬럼은 반드시 필터합니다.
+    """
+    if df is None or df.empty:
+        return df
+
+    d = df.copy()
+    desired_date = str(target_date or datetime.now().strftime("%Y%m%d")).replace("-", "").strip()
+    desired_meet = normalize_meet_value(track_place)
+    desired_rc = int(target_rc_no)
+
+    date_col = find_col_by_names(d, ["rcDate", "raceDate", "meetDate", "date", "ymd"])
+    meet_col = find_col_by_names(d, ["meet", "meetCd", "rcourse", "경마장"])
+    rc_col = find_col_by_names(d, ["rcNo", "raceNo", "경주번호"])
+
+    try:
+        if date_col:
+            ds = d[date_col].astype(str).str.replace("-", "", regex=False).str.strip()
+            d = d[ds == desired_date]
+    except Exception:
+        pass
+
+    try:
+        if meet_col:
+            ms = d[meet_col].apply(normalize_meet_value)
+            d = d[ms == desired_meet]
+    except Exception:
+        pass
+
+    try:
+        if rc_col:
+            rs = pd.to_numeric(d[rc_col], errors="coerce")
+            d = d[rs == desired_rc]
+    except Exception:
+        pass
+
+    return d
 
 def get_data():
     urls = {
@@ -430,6 +513,7 @@ def get_data():
     errors = []
     for name, url in urls.items():
         df, err = fetch_api(url)
+        df = filter_one_api(df, name)
         data[name] = df
         if err:
             errors.append(f"{name}:{err}")
@@ -802,8 +886,8 @@ def analyze(data, env):
     race = data.get("race", pd.DataFrame()).iloc[0].to_dict() if not data.get("race", pd.DataFrame()).empty else {}
     result = {
         "경마장": race.get("경마장", track_place),
-        "경주번호": race.get("경주번호", "-"),
-        "출발시간": race.get("출발시간", "-"),
+        "경주번호": race.get("경주번호", race.get("rcNo", str(int(target_rc_no)))),
+        "출발시간": race.get("출발시간", race.get("rcTime", race.get("rcTimeOrd", "-"))),
         "판정": decision,
         "공격삼쌍승": " - ".join(top),
         "방어삼복승": " / ".join(top),
@@ -861,6 +945,7 @@ rows = sum(len(v) for v in data.values())
 reco_df = read_table(RECO_FILE)
 compare_df = read_table(COMPARE_FILE)
 
+st.info(f"선택 필터: {target_date} · {track_place} · {int(target_rc_no)}R")
 m1, m2, m3 = st.columns(3)
 m1.metric("연결 데이터", rows)
 m2.metric("추천 저장", len(reco_df))
@@ -968,6 +1053,14 @@ with st.expander("숨겨진 분석 / 저장 데이터"):
         st.dataframe(data.get("entry", pd.DataFrame()).head(20), use_container_width=True)
     else:
         st.write("entry 데이터 없음")
+
+    
+    st.subheader("선택 경주 필터 상태")
+    st.write({
+        "분석날짜": target_date,
+        "경마장": track_place,
+        "경주번호": int(target_rc_no)
+    })
 
     st.subheader("API 연결 데이터 행수")
     st.dataframe(pd.DataFrame([{"API":k, "행수":len(v)} for k, v in data.items()]), use_container_width=True)
