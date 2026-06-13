@@ -168,7 +168,7 @@ weights = load_local_json(WEIGHT_FILE, DEFAULT_WEIGHTS)
 save_json(WEIGHT_FILE, weights)
 
 st.title("🐎 MARU KRA AI")
-st.caption("Secrets 자동불러오기 · 안전형 URL 자동완성 · 중복 컬럼 병합 오류 방지")
+st.caption("Secrets 자동불러오기 · 안전형 URL 자동완성 · 마번은 chulNo 우선")
 
 st.sidebar.header("MARU KRA 저장형")
 if any(secret_get(names, "") for names in SECRET_MAP.values()):
@@ -443,21 +443,47 @@ def get_data():
 
     return data, fetch_env(), errors
 
+
 def horse_no_col(df):
-    for c in ["마번", "horseNo", "hrNo", "번호", "chulNo", "출전번호", "hr_no", "ord"]:
+    """
+    실제 구매용 마번은 chulNo/출전번호가 우선입니다.
+    hrNo/horseNo는 경주마 고유번호라 53350 같은 큰 숫자가 나올 수 있으므로 뒤로 보냅니다.
+    """
+    priority = [
+        "chulNo", "출전번호", "마번", "번호", "chul_no", "entryNo",
+        "hrNo", "horseNo", "hr_no", "horseId", "경주마번호", "ord"
+    ]
+    for c in priority:
         if c in df.columns:
             return c
     return None
+
 
 def normalize_horse(df):
     if df.empty:
         return df
     d = df.copy()
     c = horse_no_col(d)
+
+    # 출전번호가 있으면 무조건 chulNo 계열을 우선 사용
+    for cc in ["chulNo", "출전번호", "마번", "번호", "chul_no", "entryNo"]:
+        if cc in d.columns:
+            c = cc
+            break
+
     if c:
         d["마번"] = pd.to_numeric(d[c], errors="coerce").fillna(0).astype(int)
-    return d
 
+    # 혹시 100 이상 큰 숫자가 마번으로 잡히면 실제 마번이 아닐 가능성이 큼
+    if "마번" in d.columns and (d["마번"] > 99).any():
+        for cc in ["chulNo", "출전번호", "마번", "번호", "chul_no", "entryNo"]:
+            if cc in d.columns:
+                alt = pd.to_numeric(d[cc], errors="coerce").fillna(0).astype(int)
+                if (alt.between(1, 30)).any():
+                    d["마번"] = alt
+                    break
+
+    return d
 
 def make_unique_columns(df):
     """
