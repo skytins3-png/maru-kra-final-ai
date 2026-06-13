@@ -168,7 +168,7 @@ weights = load_local_json(WEIGHT_FILE, DEFAULT_WEIGHTS)
 save_json(WEIGHT_FILE, weights)
 
 st.title("🐎 MARU KRA AI")
-st.caption("Secrets 자동불러오기 · 기본 API 주소 자동완성 · 모바일 실전형")
+st.caption("Secrets 자동불러오기 · 안전형 URL 자동완성 · 중복 컬럼 병합 오류 방지")
 
 st.sidebar.header("MARU KRA 저장형")
 if any(secret_get(names, "") for names in SECRET_MAP.values()):
@@ -183,7 +183,7 @@ api_key = st.sidebar.text_input(
 )
 save_api_key = st.sidebar.checkbox("API Key도 저장", value=bool(settings.get("save_api_key", False)))
 
-st.sidebar.caption("기본 주소만 넣어도 자동으로 serviceKey/pageNo/numOfRows/resultType/rcDate/meet를 붙입니다.")
+st.sidebar.caption("기본 주소만 넣으면 serviceKey/pageNo/numOfRows/resultType까지만 자동으로 붙입니다. 날짜/경마장 변수는 API별 URL에 직접 포함하세요.")
 
 with st.sidebar.expander("API URL 입력 / Secrets 자동 채움", expanded=True):
     race_url = st.text_area("1. 경주정보 API URL", value=settings.get("race_url",""), height=64)
@@ -276,6 +276,12 @@ if st.sidebar.button("API 설정 초기화", use_container_width=True):
     st.sidebar.warning("앱 내부 저장값 초기화 완료. Secrets 값은 유지됩니다.")
 
 def build_api_url(url):
+    """
+    안전형 자동완성:
+    기본 주소만 넣으면 serviceKey/pageNo/numOfRows/resultType까지만 붙입니다.
+    rcDate, meet 같은 API별 변수는 자동으로 붙이지 않습니다.
+    이유: API마다 필수 변수 이름이 달라서 잘못 붙이면 HTTP 500이 늘어납니다.
+    """
     url = str(url or "").strip()
     if not url:
         return ""
@@ -300,15 +306,9 @@ def build_api_url(url):
     if "resulttype=" not in low and "_type=" not in low and "type=" not in low:
         extras.append("resultType=json")
 
-    if all(x not in low for x in ["rcdate=", "racedate=", "meetdate=", "stndate=", "date=", "ymd="]):
-        extras.append("rcDate=" + ymd)
-
-    if "meet=" not in low and "meetcd=" not in low and "rcourse=" not in low:
-        meet_map = {"서울":"1", "제주":"2", "부산경남":"3"}
-        extras.append("meet=" + meet_map.get(track_place, "1"))
-
     if extras:
         url = url + sep + "&".join(extras)
+
     return url
 
 def json_to_df(obj):
@@ -327,14 +327,14 @@ def json_to_df(obj):
                 break
     if isinstance(obj, dict):
         obj = [obj]
-    return pd.json_normalize(obj)
+    return make_unique_columns(pd.json_normalize(obj))
 
 def xml_to_df(text):
     root = ET.fromstring(text)
     rows = []
     for item in root.findall(".//item"):
         rows.append({c.tag: c.text for c in item})
-    return pd.DataFrame(rows)
+    return make_unique_columns(pd.DataFrame(rows))
 
 def fetch_api(url):
     if not str(url).strip():
@@ -458,13 +458,61 @@ def normalize_horse(df):
         d["마번"] = pd.to_numeric(d[c], errors="coerce").fillna(0).astype(int)
     return d
 
-def merge_horse(base, df):
+
+def make_unique_columns(df):
+    """
+    API마다 같은 컬럼명이 반복될 때 pandas merge 오류를 막기 위해
+    중복 컬럼명을 자동으로 고유하게 바꿉니다.
+    """
     if df.empty:
+        return df
+    cols = []
+    seen = {}
+    for c in df.columns:
+        c = str(c)
+        if c not in seen:
+            seen[c] = 0
+            cols.append(c)
+        else:
+            seen[c] += 1
+            cols.append(f"{c}_{seen[c]}")
+    df = df.copy()
+    df.columns = cols
+    return df
+
+def merge_horse(base, df, source_name="api"):
+    """
+    여러 API 데이터를 마번 기준으로 합칩니다.
+    겹치는 컬럼은 source_name을 붙여서 MergeError를 방지합니다.
+    """
+    if base.empty or df.empty:
         return base
-    d = normalize_horse(df)
+
+    base = make_unique_columns(base.copy())
+    d = make_unique_columns(df.copy())
+
+    base = normalize_horse(base)
+    d = normalize_horse(d)
+
     if "마번" not in base.columns or "마번" not in d.columns:
         return base
-    return base.merge(d, on="마번", how="left", suffixes=("", "_x"))
+
+    try:
+        d = d.drop_duplicates(subset=["마번"], keep="first")
+    except Exception:
+        pass
+
+    rename_map = {}
+    for c in d.columns:
+        if c != "마번" and c in base.columns:
+            rename_map[c] = f"{c}_{source_name}"
+    if rename_map:
+        d = d.rename(columns=rename_map)
+
+    try:
+        return base.merge(d, on="마번", how="left")
+    except Exception:
+        return base
 
 def num(df, names, default):
     for c in names:
@@ -533,7 +581,7 @@ def analyze(data, env):
         return pd.DataFrame(), {}, []
 
     for key in ["horse","body","gear","rating","odds","today_odds","start_exam","judge","jockey_change","corner_pace","popularity","first_odds","second_odds","third_odds"]:
-        base = merge_horse(base, data.get(key, pd.DataFrame()))
+        base = merge_horse(base, data.get(key, pd.DataFrame()), key)
 
     if "마번" not in base.columns:
         base["마번"] = range(1, len(base) + 1)
@@ -684,7 +732,9 @@ m2.metric("추천 저장", len(reco_df))
 m3.metric("비교 저장", len(compare_df))
 
 if errors:
-    st.warning(" / ".join(errors[:5]))
+    st.warning(f"연결 오류 {len(errors)}개. 빈칸은 제외했고, 입력된 URL 중 실패한 항목만 표시합니다.")
+    with st.expander("오류 상세 보기"):
+        st.write(errors)
 
 st.subheader("최종 판단")
 st.success(result.get("판정", "대기"))
