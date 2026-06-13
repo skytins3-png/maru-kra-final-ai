@@ -93,10 +93,18 @@ SECRET_MAP = {
 }
 
 
+
 def mask_secret_url(url):
     s = str(url or "")
-    s = re.sub(r"(serviceKey=)[^&]+", r"\1***", s)
-    s = re.sub(r"(servicekey=)[^&]+", r"\1***", s)
+    try:
+        import re as _re
+        s = _re.sub(r"(serviceKey=)[^&]+", r"\1***", s)
+        s = _re.sub(r"(servicekey=)[^&]+", r"\1***", s)
+    except Exception:
+        if "serviceKey=" in s:
+            head, tail = s.split("serviceKey=", 1)
+            rest = tail.split("&", 1)
+            s = head + "serviceKey=***" + (("&" + rest[1]) if len(rest) > 1 else "")
     return s
 
 def secret_get(names, default=""):
