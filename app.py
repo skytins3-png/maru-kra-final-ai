@@ -168,7 +168,7 @@ weights = load_local_json(WEIGHT_FILE, DEFAULT_WEIGHTS)
 save_json(WEIGHT_FILE, weights)
 
 st.title("🐎 MARU KRA AI")
-st.caption("Secrets 자동불러오기 · 안전형 URL 자동완성 · 마번은 chulNo 우선")
+st.caption("Secrets 자동불러오기 · 안전형 URL 자동완성 · 0번 제거 · 실전 마번만 분석")
 
 st.sidebar.header("MARU KRA 저장형")
 if any(secret_get(names, "") for names in SECRET_MAP.values()):
@@ -459,29 +459,48 @@ def horse_no_col(df):
     return None
 
 
+
 def normalize_horse(df):
     if df.empty:
         return df
     d = df.copy()
-    c = horse_no_col(d)
 
-    # 출전번호가 있으면 무조건 chulNo 계열을 우선 사용
-    for cc in ["chulNo", "출전번호", "마번", "번호", "chul_no", "entryNo"]:
+    # 실제 구매용 마번 후보. hrNo/horseNo는 고유번호라 뒤로 둠.
+    entry_candidates = ["chulNo", "출전번호", "마번", "번호", "chul_no", "entryNo", "chulNum", "horseNum"]
+    id_candidates = ["hrNo", "horseNo", "hr_no", "horseId", "경주마번호", "ord"]
+
+    chosen = None
+    for cc in entry_candidates:
         if cc in d.columns:
-            c = cc
+            chosen = cc
             break
-
-    if c:
-        d["마번"] = pd.to_numeric(d[c], errors="coerce").fillna(0).astype(int)
-
-    # 혹시 100 이상 큰 숫자가 마번으로 잡히면 실제 마번이 아닐 가능성이 큼
-    if "마번" in d.columns and (d["마번"] > 99).any():
-        for cc in ["chulNo", "출전번호", "마번", "번호", "chul_no", "entryNo"]:
+    if chosen is None:
+        for cc in id_candidates:
             if cc in d.columns:
-                alt = pd.to_numeric(d[cc], errors="coerce").fillna(0).astype(int)
-                if (alt.between(1, 30)).any():
-                    d["마번"] = alt
-                    break
+                chosen = cc
+                break
+
+    if chosen:
+        raw = pd.to_numeric(d[chosen], errors="coerce")
+        d["마번"] = raw
+
+    # 마번은 실전 구매용 기준 1~30만 인정. 0/고유번호/결측 제거.
+    if "마번" in d.columns:
+        d["마번"] = pd.to_numeric(d["마번"], errors="coerce")
+
+        # 만약 선택된 값이 대부분 100 이상이면 고유번호로 잘못 잡힌 것.
+        # 이때 다시 chulNo 계열 후보에서 1~30 값을 찾음.
+        valid_now = d["마번"].between(1, 30, inclusive="both")
+        if valid_now.sum() == 0:
+            for cc in entry_candidates:
+                if cc in d.columns:
+                    alt = pd.to_numeric(d[cc], errors="coerce")
+                    if alt.between(1, 30, inclusive="both").sum() > 0:
+                        d["마번"] = alt
+                        break
+
+        # 0이나 결측은 유지하지 않음. 분석 전에 제거할 수 있게 NaN으로 둠.
+        d.loc[~d["마번"].between(1, 30, inclusive="both"), "마번"] = pd.NA
 
     return d
 
@@ -601,16 +620,68 @@ def env_bonus(row, env):
 
 def analyze(data, env):
     base = normalize_horse(data.get("entry", pd.DataFrame()))
+    if not base.empty and "마번" in base.columns:
+        base = base[pd.to_numeric(base["마번"], errors="coerce").between(1, 30, inclusive="both")].copy()
+
     if base.empty:
         base = normalize_horse(data.get("horse", pd.DataFrame()))
+        if not base.empty and "마번" in base.columns:
+            base = base[pd.to_numeric(base["마번"], errors="coerce").between(1, 30, inclusive="both")].copy()
+
     if base.empty:
-        return pd.DataFrame(), {}, []
+        return pd.DataFrame(), {
+            "경마장": track_place,
+            "경주번호": "-",
+            "출발시간": "-",
+            "판정": "관망",
+            "공격삼쌍승": "출전마 번호 인식 실패",
+            "방어삼복승": "-",
+            "보조삼쌍승": "-",
+            "놓치기아까운1": "",
+            "놓치기아까운2": "",
+            "예상배당": 0,
+            "신뢰도": 0,
+            "추천금액": 0,
+            "오늘투입": int(budget_status().get("today_bet",0)),
+            "오늘손익": int(budget_status().get("today_profit",0)),
+            "누적손익": int(budget_status().get("total_profit",0)),
+            "오늘진입": int(budget_status().get("entries",0)),
+            "자금상태": "출전마 번호 인식 실패",
+            "기상특보위험": 0,
+        }, []
 
     for key in ["horse","body","gear","rating","odds","today_odds","start_exam","judge","jockey_change","corner_pace","popularity","first_odds","second_odds","third_odds"]:
         base = merge_horse(base, data.get(key, pd.DataFrame()), key)
 
     if "마번" not in base.columns:
         base["마번"] = range(1, len(base) + 1)
+
+    base["마번"] = pd.to_numeric(base["마번"], errors="coerce")
+    base = base[base["마번"].between(1, 30, inclusive="both")].copy()
+    base["마번"] = base["마번"].astype(int)
+    base = base.drop_duplicates(subset=["마번"], keep="first")
+
+    if base.empty or len(base["마번"].unique()) < 3:
+        return pd.DataFrame(), {
+            "경마장": track_place,
+            "경주번호": "-",
+            "출발시간": "-",
+            "판정": "관망",
+            "공격삼쌍승": "출전마 3두 이상 필요",
+            "방어삼복승": "-",
+            "보조삼쌍승": "-",
+            "놓치기아까운1": "",
+            "놓치기아까운2": "",
+            "예상배당": 0,
+            "신뢰도": 0,
+            "추천금액": 0,
+            "오늘투입": int(budget_status().get("today_bet",0)),
+            "오늘손익": int(budget_status().get("today_profit",0)),
+            "누적손익": int(budget_status().get("total_profit",0)),
+            "오늘진입": int(budget_status().get("entries",0)),
+            "자금상태": "출전마 번호 부족",
+            "기상특보위험": 0,
+        }, []
 
     h = base.copy()
 
@@ -665,7 +736,8 @@ def analyze(data, env):
     elif risk_mode == "공격형":
         volatility *= 1.15
 
-    nums = h["마번"].tolist()
+    nums = [int(x) for x in h["마번"].tolist() if pd.notna(x) and 1 <= int(x) <= 30]
+    h = h[pd.to_numeric(h["마번"], errors="coerce").between(1, 30, inclusive="both")].copy()
     scores = h["최종점수"].tolist()
     counter = Counter()
     random.seed(42)
