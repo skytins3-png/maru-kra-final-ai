@@ -92,6 +92,13 @@ SECRET_MAP = {
     "kra_url": ["KRA_URL", "kra_url"],
 }
 
+
+def mask_secret_url(url):
+    s = str(url or "")
+    s = re.sub(r"(serviceKey=)[^&]+", r"\1***", s)
+    s = re.sub(r"(servicekey=)[^&]+", r"\1***", s)
+    return s
+
 def secret_get(names, default=""):
     """
     Streamlit Secrets에서 값 가져오기.
@@ -168,7 +175,7 @@ weights = load_local_json(WEIGHT_FILE, DEFAULT_WEIGHTS)
 save_json(WEIGHT_FILE, weights)
 
 st.title("🐎 MARU KRA AI")
-st.caption("Secrets 자동불러오기 · 균형형 필터 · chulNo 우선 · 오류 최소화")
+st.caption("Secrets 자동불러오기 · API Key 숨김 · 현재 경주 부족 시 관망")
 
 st.sidebar.header("MARU KRA 저장형")
 if any(secret_get(names, "") for names in SECRET_MAP.values()):
@@ -695,6 +702,29 @@ def budget_status():
         reason = f"하루 {int(daily_budget):,}원 한도 도달"
     return {"today_bet":today_bet, "today_profit":today_profit, "total_profit":total_profit, "entries":entries, "locked":locked, "reason":reason}
 
+
+def current_race_ready(result):
+    """
+    현재 경주번호/출발시간이 비어 있거나 조합이 이상하면 실전 추천/저장을 막습니다.
+    """
+    if not result:
+        return False
+    rc = str(result.get("경주번호", "")).strip()
+    combo = str(result.get("공격삼쌍승", "")).strip()
+    if rc in ["", "-", "nan", "None"]:
+        return False
+    parts = [p.strip() for p in combo.replace("/", "-").split("-")]
+    if len(parts) != 3:
+        return False
+    try:
+        nums = [int(p) for p in parts]
+        # 일반 경주 마번 범위 안전장치. 15번 이상은 데이터 섞임 가능성으로 관망 처리.
+        if not all(1 <= n <= 14 for n in nums):
+            return False
+    except Exception:
+        return False
+    return True
+
 def env_bonus(row, env):
     front = float(row.get("선행력", 70))
     late = float(row.get("추입력", 70))
@@ -943,6 +973,12 @@ env = st.session_state["env"]
 errors = st.session_state["errors"]
 
 score_df, result, combos = analyze(data, env)
+if result and not current_race_ready(result):
+    result["판정"] = "관망"
+    result["추천금액"] = 0
+    result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
+    result["자금상태"] = "현재 경주정보 부족 / 데이터 섞임 방지"
+
 try:
     entry_candidate = horse_no_col(data.get("entry", pd.DataFrame()))
     if not entry_candidate:
@@ -962,7 +998,7 @@ def is_valid_combo_text(x):
     except Exception:
         return False
 
-if auto_save_reco and result and is_valid_combo_text(result.get("공격삼쌍승","")) and int(result.get("신뢰도",0)) > 0:
+if auto_save_reco and result and current_race_ready(result) and is_valid_combo_text(result.get("공격삼쌍승","")) and int(result.get("신뢰도",0)) > 0:
     append_table(RECO_FILE, {
         "저장시각":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "날짜":target_date if "target_date" in globals() else today(),
@@ -979,6 +1015,7 @@ compare_df = read_table(COMPARE_FILE)
 
 st.info(f"선택 기준: {target_date} · {track_place} · {int(target_rc_no)}R · 엄격필터={strict_race_filter}")
 m1, m2, m3 = st.columns(3)
+st.caption("URL 예시는 API Key를 숨겨 표시합니다. 과거 캡처에 키가 보였다면 재발급을 권장합니다.")
 m1.metric("연결 데이터", rows)
 m2.metric("추천 저장", len(reco_df))
 m3.metric("비교 저장", len(compare_df))
@@ -1095,13 +1132,13 @@ with st.expander("숨겨진 분석 / 저장 데이터"):
     st.subheader("삼쌍승 시뮬레이션")
     st.dataframe(pd.DataFrame(combos), use_container_width=True)
 
-    st.subheader("추천 로그")
+    st.subheader("과거 추천 로그")
     st.dataframe(read_table(RECO_FILE).tail(100), use_container_width=True)
 
-    st.subheader("예상 vs 실제 비교 로그")
+    st.subheader("과거 예상 vs 실제 비교 로그")
     st.dataframe(read_table(COMPARE_FILE).tail(100), use_container_width=True)
 
-    st.subheader("자동 완성된 URL 예시")
+    st.subheader("자동 완성된 URL 예시 — API Key 숨김")
     examples = []
     for name, url in {
         "race":race_url,
@@ -1111,5 +1148,5 @@ with st.expander("숨겨진 분석 / 저장 데이터"):
         "today_odds":today_odds_url,
         "corner_pace":corner_pace_url,
     }.items():
-        examples.append({"API":name, "요청URL":build_api_url(url)})
+        examples.append({"API":name, "요청URL":mask_secret_url(build_api_url(url))})
     st.dataframe(pd.DataFrame(examples), use_container_width=True)
