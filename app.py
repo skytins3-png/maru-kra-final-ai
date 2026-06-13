@@ -168,7 +168,7 @@ weights = load_local_json(WEIGHT_FILE, DEFAULT_WEIGHTS)
 save_json(WEIGHT_FILE, weights)
 
 st.title("🐎 MARU KRA AI")
-st.caption("Secrets 자동불러오기 · 안전형 URL 자동완성 · 0번 제거 · 실전 마번만 분석")
+st.caption("Secrets 자동불러오기 · 마번 컬럼 자동탐색 · 원본 컬럼 진단")
 
 st.sidebar.header("MARU KRA 저장형")
 if any(secret_get(names, "") for names in SECRET_MAP.values()):
@@ -444,62 +444,71 @@ def get_data():
     return data, fetch_env(), errors
 
 
+
 def horse_no_col(df):
     """
-    실제 구매용 마번은 chulNo/출전번호가 우선입니다.
-    hrNo/horseNo는 경주마 고유번호라 53350 같은 큰 숫자가 나올 수 있으므로 뒤로 보냅니다.
+    API별 컬럼명이 달라도 실제 마번 컬럼을 자동 탐색합니다.
+    1순위: 이름상 출전번호/chulNo 계열
+    2순위: 값이 1~30 범위인 숫자 컬럼
+    단, hrNo/horseNo처럼 고유번호 성격은 후순위/제외
     """
-    priority = [
-        "chulNo", "출전번호", "마번", "번호", "chul_no", "entryNo",
-        "hrNo", "horseNo", "hr_no", "horseId", "경주마번호", "ord"
-    ]
-    for c in priority:
-        if c in df.columns:
-            return c
-    return None
+    if df.empty:
+        return None
 
+    cols = [str(c) for c in df.columns]
+    lower_map = {str(c).lower(): c for c in df.columns}
+
+    exact_priority = [
+        "chulNo", "chulno", "chul_no", "chulNum", "entryNo",
+        "출전번호", "출전마번", "마번", "번호"
+    ]
+
+    for key in exact_priority:
+        for c in df.columns:
+            if str(c).lower() == key.lower():
+                return c
+
+    # 포함 검색: chul, 출전, 마번
+    include_keywords = ["chul", "출전", "마번"]
+    exclude_keywords = ["hrno", "horseno", "horseid", "경주마번호", "rating", "odds"]
+    for c in df.columns:
+        cl = str(c).lower()
+        if any(k in cl for k in include_keywords) and not any(x in cl for x in exclude_keywords):
+            vals = pd.to_numeric(df[c], errors="coerce")
+            if vals.between(1, 30, inclusive="both").sum() > 0:
+                return c
+
+    # 마지막: 값 자체가 1~30 범위인 숫자 컬럼 탐색
+    best_col = None
+    best_count = 0
+    for c in df.columns:
+        cl = str(c).lower()
+        if any(x in cl for x in exclude_keywords):
+            continue
+        vals = pd.to_numeric(df[c], errors="coerce")
+        count = int(vals.between(1, 30, inclusive="both").sum())
+        if count > best_count:
+            best_count = count
+            best_col = c
+
+    if best_count > 0:
+        return best_col
+
+    return None
 
 
 def normalize_horse(df):
     if df.empty:
         return df
     d = df.copy()
+    c = horse_no_col(d)
 
-    # 실제 구매용 마번 후보. hrNo/horseNo는 고유번호라 뒤로 둠.
-    entry_candidates = ["chulNo", "출전번호", "마번", "번호", "chul_no", "entryNo", "chulNum", "horseNum"]
-    id_candidates = ["hrNo", "horseNo", "hr_no", "horseId", "경주마번호", "ord"]
+    if c:
+        d["마번"] = pd.to_numeric(d[c], errors="coerce")
 
-    chosen = None
-    for cc in entry_candidates:
-        if cc in d.columns:
-            chosen = cc
-            break
-    if chosen is None:
-        for cc in id_candidates:
-            if cc in d.columns:
-                chosen = cc
-                break
-
-    if chosen:
-        raw = pd.to_numeric(d[chosen], errors="coerce")
-        d["마번"] = raw
-
-    # 마번은 실전 구매용 기준 1~30만 인정. 0/고유번호/결측 제거.
+    # 0/고유번호/결측 제거 가능하도록 NaN 처리
     if "마번" in d.columns:
         d["마번"] = pd.to_numeric(d["마번"], errors="coerce")
-
-        # 만약 선택된 값이 대부분 100 이상이면 고유번호로 잘못 잡힌 것.
-        # 이때 다시 chulNo 계열 후보에서 1~30 값을 찾음.
-        valid_now = d["마번"].between(1, 30, inclusive="both")
-        if valid_now.sum() == 0:
-            for cc in entry_candidates:
-                if cc in d.columns:
-                    alt = pd.to_numeric(d[cc], errors="coerce")
-                    if alt.between(1, 30, inclusive="both").sum() > 0:
-                        d["마번"] = alt
-                        break
-
-        # 0이나 결측은 유지하지 않음. 분석 전에 제거할 수 있게 NaN으로 둠.
         d.loc[~d["마번"].between(1, 30, inclusive="both"), "마번"] = pd.NA
 
     return d
@@ -618,6 +627,27 @@ def env_bonus(row, env):
         b += (power - 70) * 0.08 + (late - 70) * 0.07
     return round(b, 1)
 
+
+def build_candidate_base_from_all(data):
+    """
+    entry에서 마번을 못 찾을 때, odds/result 계열에 있는 chulNo/chulNo2/chulNo3 등을 모아
+    최소한 실전 마번 후보표를 만듭니다.
+    """
+    nums = set()
+    for key, df in data.items():
+        if df is None or df.empty:
+            continue
+        for c in df.columns:
+            cl = str(c).lower()
+            if any(k in cl for k in ["chul", "출전", "마번"]):
+                vals = pd.to_numeric(df[c], errors="coerce").dropna().astype(int)
+                for v in vals.tolist():
+                    if 1 <= v <= 30:
+                        nums.add(int(v))
+    if len(nums) >= 3:
+        return pd.DataFrame([{"마번": n, "마명": f"{n}번"} for n in sorted(nums)])
+    return pd.DataFrame()
+
 def analyze(data, env):
     base = normalize_horse(data.get("entry", pd.DataFrame()))
     if not base.empty and "마번" in base.columns:
@@ -627,6 +657,9 @@ def analyze(data, env):
         base = normalize_horse(data.get("horse", pd.DataFrame()))
         if not base.empty and "마번" in base.columns:
             base = base[pd.to_numeric(base["마번"], errors="coerce").between(1, 30, inclusive="both")].copy()
+
+    if base.empty:
+        base = build_candidate_base_from_all(data)
 
     if base.empty:
         return pd.DataFrame(), {
@@ -908,6 +941,30 @@ with st.expander("결과 입력 / 예상비교 / 자가학습"):
         st.success(f"저장 완료: {typ}")
 
 with st.expander("숨겨진 분석 / 저장 데이터"):
+    
+    st.subheader("API 원본 컬럼 진단")
+    debug_keys = ["race", "entry", "horse", "body", "gear", "rating", "odds", "today_odds", "corner_pace"]
+    rows = []
+    for k in debug_keys:
+        df = data.get(k, pd.DataFrame())
+        if df is not None and not df.empty:
+            rows.append({
+                "API": k,
+                "행수": len(df),
+                "컬럼수": len(df.columns),
+                "마번후보": str(horse_no_col(df)),
+                "컬럼목록": ", ".join([str(c) for c in list(df.columns)[:25]])
+            })
+        else:
+            rows.append({"API": k, "행수": 0, "컬럼수": 0, "마번후보": "", "컬럼목록": ""})
+    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    st.subheader("2번 출전 등록말 원본 미리보기")
+    if not data.get("entry", pd.DataFrame()).empty:
+        st.dataframe(data.get("entry", pd.DataFrame()).head(20), use_container_width=True)
+    else:
+        st.write("entry 데이터 없음")
+
     st.subheader("API 연결 데이터 행수")
     st.dataframe(pd.DataFrame([{"API":k, "행수":len(v)} for k, v in data.items()]), use_container_width=True)
 
