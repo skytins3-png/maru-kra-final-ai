@@ -168,7 +168,7 @@ weights = load_local_json(WEIGHT_FILE, DEFAULT_WEIGHTS)
 save_json(WEIGHT_FILE, weights)
 
 st.title("🐎 MARU KRA AI")
-st.caption("Secrets 자동불러오기 · 마번 컬럼 자동탐색 · 원본 컬럼 진단")
+st.caption("Secrets 자동불러오기 · chulNo 신뢰소스 우선 · age 마번 오인 방지")
 
 st.sidebar.header("MARU KRA 저장형")
 if any(secret_get(names, "") for names in SECRET_MAP.values()):
@@ -445,57 +445,37 @@ def get_data():
 
 
 
+
 def horse_no_col(df):
     """
-    API별 컬럼명이 달라도 실제 마번 컬럼을 자동 탐색합니다.
-    1순위: 이름상 출전번호/chulNo 계열
-    2순위: 값이 1~30 범위인 숫자 컬럼
-    단, hrNo/horseNo처럼 고유번호 성격은 후순위/제외
+    실제 구매용 마번 컬럼만 찾습니다.
+    age, rcNo, meet, rating 같은 숫자 컬럼은 절대 마번으로 사용하지 않습니다.
     """
     if df.empty:
         return None
 
-    cols = [str(c) for c in df.columns]
-    lower_map = {str(c).lower(): c for c in df.columns}
-
+    # 정확한 출전번호 계열만 인정
     exact_priority = [
         "chulNo", "chulno", "chul_no", "chulNum", "entryNo",
-        "출전번호", "출전마번", "마번", "번호"
+        "출전번호", "출전마번", "마번"
     ]
 
     for key in exact_priority:
         for c in df.columns:
             if str(c).lower() == key.lower():
-                return c
+                vals = pd.to_numeric(df[c], errors="coerce")
+                if vals.between(1, 30, inclusive="both").sum() > 0:
+                    return c
 
-    # 포함 검색: chul, 출전, 마번
-    include_keywords = ["chul", "출전", "마번"]
-    exclude_keywords = ["hrno", "horseno", "horseid", "경주마번호", "rating", "odds"]
+    # 포함 검색도 chul/출전/마번만 허용
     for c in df.columns:
         cl = str(c).lower()
-        if any(k in cl for k in include_keywords) and not any(x in cl for x in exclude_keywords):
+        if any(k in cl for k in ["chul", "출전", "마번"]):
             vals = pd.to_numeric(df[c], errors="coerce")
             if vals.between(1, 30, inclusive="both").sum() > 0:
                 return c
 
-    # 마지막: 값 자체가 1~30 범위인 숫자 컬럼 탐색
-    best_col = None
-    best_count = 0
-    for c in df.columns:
-        cl = str(c).lower()
-        if any(x in cl for x in exclude_keywords):
-            continue
-        vals = pd.to_numeric(df[c], errors="coerce")
-        count = int(vals.between(1, 30, inclusive="both").sum())
-        if count > best_count:
-            best_count = count
-            best_col = c
-
-    if best_count > 0:
-        return best_col
-
     return None
-
 
 def normalize_horse(df):
     if df.empty:
@@ -628,24 +608,41 @@ def env_bonus(row, env):
     return round(b, 1)
 
 
+
 def build_candidate_base_from_all(data):
     """
-    entry에서 마번을 못 찾을 때, odds/result 계열에 있는 chulNo/chulNo2/chulNo3 등을 모아
-    최소한 실전 마번 후보표를 만듭니다.
+    entry 데이터에 chulNo가 없을 때, 신뢰 가능한 API의 chulNo만 모아 출전마 후보표를 만듭니다.
+    age/rcNo 같은 숫자는 절대 마번으로 사용하지 않습니다.
+    우선순위: body, gear, today_odds, first_odds, second_odds, third_odds, odds, corner_pace
     """
+    priority_keys = ["body", "gear", "today_odds", "first_odds", "second_odds", "third_odds", "odds", "corner_pace"]
     nums = set()
-    for key, df in data.items():
+    names = {}
+
+    for key in priority_keys:
+        df = data.get(key, pd.DataFrame())
         if df is None or df.empty:
             continue
-        for c in df.columns:
-            cl = str(c).lower()
-            if any(k in cl for k in ["chul", "출전", "마번"]):
-                vals = pd.to_numeric(df[c], errors="coerce").dropna().astype(int)
-                for v in vals.tolist():
-                    if 1 <= v <= 30:
-                        nums.add(int(v))
+
+        no_col = horse_no_col(df)
+        if not no_col:
+            continue
+
+        tmp = df.copy()
+        tmp["_tmp_no"] = pd.to_numeric(tmp[no_col], errors="coerce")
+        tmp = tmp[tmp["_tmp_no"].between(1, 30, inclusive="both")]
+
+        for _, r in tmp.iterrows():
+            n = int(r["_tmp_no"])
+            nums.add(n)
+            for name_col in ["hrName", "마명", "horseName", "hr_name"]:
+                if name_col in tmp.columns and pd.notna(r.get(name_col, None)):
+                    names[n] = str(r.get(name_col))
+                    break
+
     if len(nums) >= 3:
-        return pd.DataFrame([{"마번": n, "마명": f"{n}번"} for n in sorted(nums)])
+        return pd.DataFrame([{"마번": n, "마명": names.get(n, f"{n}번")} for n in sorted(nums)])
+
     return pd.DataFrame()
 
 def analyze(data, env):
@@ -841,6 +838,13 @@ env = st.session_state["env"]
 errors = st.session_state["errors"]
 
 score_df, result, combos = analyze(data, env)
+try:
+    entry_candidate = horse_no_col(data.get("entry", pd.DataFrame()))
+    if not entry_candidate:
+        st.info("마번 기준: entry에 chulNo가 없어 body/gear/today_odds의 chulNo를 우선 사용합니다.")
+except Exception:
+    pass
+
 
 if auto_save_reco and result:
     append_table(RECO_FILE, {
