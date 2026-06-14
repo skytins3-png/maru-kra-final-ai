@@ -371,60 +371,41 @@ def append_table(path, row):
 def today():
     return today_kst()
 
+
 def current_setting_payload():
-    return {
-        "api_key": api_key if save_api_key else "",
-        "save_api_key": save_api_key,
-        "race_url": race_url,
-        "entry_url": entry_url,
-        "horse_url": horse_url,
-        "body_url": body_url,
-        "gear_url": gear_url,
-        "rating_url": rating_url,
-        "odds_url": odds_url,
-        "today_odds_url": today_odds_url,
-        "result_detail_url": result_detail_url,
-        "race_record_url": race_record_url,
-        "start_exam_url": start_exam_url,
-        "judge_url": judge_url,
-        "jockey_change_url": jockey_change_url,
-        "weather_alert_url": weather_alert_url,
-        "corner_pace_url": corner_pace_url,
-        "popularity_url": popularity_url,
-        "first_odds_url": first_odds_url,
-        "second_odds_url": second_odds_url,
-        "third_odds_url": third_odds_url,
-        "kra_url": kra_url,
-        "track_place": track_place,
-        "bankroll": bankroll,
-        "unit_bet": unit_bet,
-        "daily_loss_limit": daily_loss_limit,
-        "profit_unlock": profit_unlock,
-        "daily_budget": daily_budget,
-        "daily_entries_limit": daily_entries_limit,
-        "target_rc_no": int(target_rc_no),
-        "target_date": target_date
-    }
+    payload = {}
+    # 기존 설정값 유지
+    try:
+        if isinstance(settings, dict):
+            payload.update(settings)
+    except Exception:
+        pass
 
-if st.sidebar.button("API 저장", use_container_width=True):
-    save_json(SETTINGS_FILE, current_setting_payload())
-    st.sidebar.success("저장 완료")
-
-
-if st.sidebar.button("추천/비교 로그 초기화", use_container_width=True):
-    for p in [RECO_FILE, COMPARE_FILE, RESULT_FILE]:
+    # API Key / URL 저장
+    for k in [
+        "api_key",
+        "race_url", "entry_url", "horse_url", "body_url", "gear_url",
+        "rating_url", "odds_url", "today_odds_url", "result_detail_url",
+        "race_record_url", "start_exam_url", "judge_url", "jockey_change_url",
+        "weather_alert_url", "corner_pace_url", "popularity_url",
+        "first_odds_url", "second_odds_url", "third_odds_url"
+    ]:
         try:
-            if p.exists():
-                p.unlink()
+            payload[k] = globals().get(k, payload.get(k, ""))
         except Exception:
             pass
-    st.sidebar.warning("추천/비교/결과 로그 초기화 완료")
 
-if st.sidebar.button("API 설정 초기화", use_container_width=True):
-    if SETTINGS_FILE.exists():
-        SETTINGS_FILE.unlink()
-    st.sidebar.warning("앱 내부 저장값 초기화 완료. Secrets 값은 유지됩니다.")
+    # 분석 설정 저장
+    for k in [
+        "target_date", "target_rc_no", "track_place",
+        "daily_loss_stop", "daily_entries_limit"
+    ]:
+        try:
+            payload[k] = globals().get(k, payload.get(k, ""))
+        except Exception:
+            pass
 
+    return payload
 
 def resolve_api_url(var_name, secret_keys=None, default=""):
     """
@@ -832,7 +813,20 @@ first_odds_url = globals().get("first_odds_url", "")
 second_odds_url = globals().get("second_odds_url", "")
 third_odds_url = globals().get("third_odds_url", "")
 
+
+# 샘플데이터 사용 여부 기본값 보강
+use_sample = globals().get("use_sample", False)
+
 def get_data():
+
+    # use_sample 변수 누락 방지
+    use_sample = bool(globals().get("use_sample", False))
+    try:
+        if "use_sample" in st.session_state:
+            use_sample = bool(st.session_state["use_sample"])
+    except Exception:
+        pass
+
 
     # API URL 변수 누락 방지
     race_url = resolve_api_url("race_url", ["RACE_URL", "race_url"])
@@ -885,7 +879,7 @@ def get_data():
         if err:
             errors.append(f"{name}:{err}")
 
-    if use_sample and data.get("entry", pd.DataFrame()).empty and data.get("horse", pd.DataFrame()).empty:
+    if bool(globals().get('use_sample', locals().get('use_sample', False))) and data.get("entry", pd.DataFrame()).empty and data.get("horse", pd.DataFrame()).empty:
         race, horse, risk = sample_data()
         data["race"] = race
         data["entry"] = horse
