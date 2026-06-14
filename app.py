@@ -385,7 +385,7 @@ section[data-testid="stSidebar"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.caption("PC/모바일 공용 허브 · 실시간 API 수집 · Google Sheets 저장/불러오기 · chulNo 우선 분석")
+st.caption("현재경주 자동필터 · chulNo 1~14만 사용 · 관망 시 조합 숨김 · 허브 연동")
 st.info("허브 실시간 구조: API 수집 → Google Sheets 허브 저장 → PC/모바일 불러오기 → 분석/추천/학습")
 
 st.sidebar.header("MARU KRA 저장형")
@@ -402,7 +402,7 @@ if sheets_enabled():
     else:
         st.sidebar.warning(wb_err)
 else:
-    st.sidebar.info("Sheets 미설정: 로컬 저장 사용")
+    st.sidebar.info("Sheets 미설정: 로컬 저장만 사용")
 if any(secret_get(names, "") for names in SECRET_MAP.values()):
     st.sidebar.success("Secrets 값 자동 불러옴")
 else:
@@ -746,6 +746,138 @@ def soft_filter_one_api(df, key="api"):
         return original
     return d
 
+
+def _safe_str(x):
+    return str(x or "").strip()
+
+def _num_series(s):
+    return pd.to_numeric(s, errors="coerce")
+
+def current_target_values():
+    try:
+        d = str(target_date).replace("-", "").strip()
+    except Exception:
+        d = today()
+    try:
+        rc = int(target_rc_no)
+    except Exception:
+        rc = None
+    try:
+        meet = track_place
+    except Exception:
+        meet = ""
+    return d, meet, rc
+
+def normalize_meet_for_filter(x):
+    s = str(x or "").strip()
+    if s in ["1", "서울", "SEOUL", "Seoul", "seoul"]:
+        return "서울"
+    if s in ["2", "제주", "JEJU", "Jeju", "jeju"]:
+        return "제주"
+    if s in ["3", "부산경남", "부경", "부산", "BUSAN", "Busan", "busan"]:
+        return "부산경남"
+    return s
+
+def find_any_col(df, names):
+    if df is None or df.empty:
+        return None
+    lower = {str(c).lower(): c for c in df.columns}
+    for n in names:
+        if str(n).lower() in lower:
+            return lower[str(n).lower()]
+    for c in df.columns:
+        cl = str(c).lower()
+        for n in names:
+            if str(n).lower() in cl:
+                return c
+    return None
+
+def smart_current_filter(df, api_name=""):
+    """
+    현재 선택 경주만 우선 사용합니다.
+    rcDate / meet / rcNo 컬럼이 있으면 자동 필터.
+    필터 후 1행 이상이면 필터된 데이터 사용.
+    완전히 비면 원본 유지하되 추천 단계에서는 관망 처리.
+    """
+    if df is None or df.empty:
+        return df
+
+    d = df.copy()
+    original = d.copy()
+    target_date_s, target_meet, target_rc = current_target_values()
+
+    date_col = find_any_col(d, ["rcDate", "raceDate", "meetDate", "date", "ymd"])
+    meet_col = find_any_col(d, ["meet", "meetCd", "rcourse", "경마장"])
+    rc_col = find_any_col(d, ["rcNo", "raceNo", "경주번호"])
+
+    try:
+        if date_col:
+            ds = d[date_col].astype(str).str.replace("-", "", regex=False).str.strip()
+            d = d[ds == target_date_s]
+    except Exception:
+        pass
+
+    try:
+        if meet_col:
+            ms = d[meet_col].apply(normalize_meet_for_filter)
+            d = d[ms == normalize_meet_for_filter(target_meet)]
+    except Exception:
+        pass
+
+    try:
+        if rc_col and target_rc is not None:
+            rs = pd.to_numeric(d[rc_col], errors="coerce")
+            d = d[rs == target_rc]
+    except Exception:
+        pass
+
+    if not d.empty:
+        return d
+
+    return original
+
+def has_current_chulno_source(data):
+    """
+    현재 경주 기준 chulNo 소스가 있는지 확인.
+    body/gear/today_odds 중 현재 경주 필터 후 chulNo가 3개 이상이면 True.
+    """
+    trusted = ["body", "gear", "today_odds"]
+    for key in trusted:
+        df = data.get(key, pd.DataFrame())
+        if df is None or df.empty:
+            continue
+        f = smart_current_filter(df, key)
+        col = horse_no_col(f)
+        if col:
+            vals = pd.to_numeric(f[col], errors="coerce")
+            if vals.between(1, 14, inclusive="both").sum() >= 3:
+                return True
+    return False
+
+def clean_result_for_display(result, data):
+    """
+    관망/무효 상태에서는 조합을 화면에서 숨깁니다.
+    """
+    if not result:
+        return result
+    try:
+        combo = str(result.get("공격삼쌍승", "")).replace("/", "-").strip()
+        nums = [int(x.strip()) for x in combo.split("-") if x.strip()]
+        invalid_combo = len(nums) != 3 or any(n < 1 or n > 14 for n in nums)
+    except Exception:
+        invalid_combo = True
+
+    if invalid_combo or not has_current_chulno_source(data):
+        result["판정"] = "관망"
+        result["추천금액"] = 0
+        result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
+        result["자금상태"] = "현재 경주 chulNo 부족 / 데이터 섞임 방지"
+        result["공격삼쌍승"] = "-"
+        result["방어삼복승"] = "-"
+        result["보조삼쌍승"] = "-"
+        result["예상배당"] = 0
+    return result
+
 def get_data():
     urls = {
         "race":race_url,
@@ -772,8 +904,8 @@ def get_data():
     errors = []
     for name, url in urls.items():
         df, err = fetch_api(url)
-        df = soft_filter_one_api(df, name)
-        data[name] = df
+        df = smart_current_filter(df, name)
+        data[name] = smart_current_filter(df, name)
         if err:
             errors.append(f"{name}:{err}")
 
@@ -790,31 +922,32 @@ def get_data():
 
 
 
+
 def horse_no_col(df):
     """
-    실제 구매용 마번 컬럼만 찾습니다.
-    age, rcNo, meet, rating 같은 숫자 컬럼은 마번으로 사용하지 않습니다.
+    실제 구매용 마번 컬럼만 사용합니다.
+    enNo/hrNo/age/rcNo/meet/rating/chaksun 등은 절대 마번으로 쓰지 않습니다.
     """
-    if df.empty:
+    if df is None or df.empty:
         return None
 
-    exact_priority = [
-        "chulNo", "chulno", "chul_no", "chulNum", "entryNo",
-        "출전번호", "출전마번", "마번"
-    ]
+    allowed_exact = ["chulNo", "chulno", "chul_no", "출전번호", "출전마번", "마번"]
+    banned_words = ["enno", "hrno", "horseno", "age", "rcno", "meet", "rating", "chaksun", "prize", "amt"]
 
-    for key in exact_priority:
+    for key in allowed_exact:
         for c in df.columns:
             if str(c).lower() == key.lower():
                 vals = pd.to_numeric(df[c], errors="coerce")
-                if vals.between(1, 30, inclusive="both").sum() > 0:
+                if vals.between(1, 14, inclusive="both").sum() >= 3:
                     return c
 
     for c in df.columns:
         cl = str(c).lower()
-        if any(k in cl for k in ["chul", "출전", "마번"]):
+        if any(b in cl for b in banned_words):
+            continue
+        if "chul" in cl or "출전" in cl or "마번" in cl:
             vals = pd.to_numeric(df[c], errors="coerce")
-            if vals.between(1, 30, inclusive="both").sum() > 0:
+            if vals.between(1, 14, inclusive="both").sum() >= 3:
                 return c
 
     return None
@@ -1097,12 +1230,13 @@ def env_bonus(row, env):
 
 
 
+
 def build_candidate_base_from_all(data):
     """
-    entry에 chulNo가 없을 때, 신뢰 가능한 chulNo 소스만 모아 출전마 후보표를 만듭니다.
-    horse 기본정보나 age/rcNo는 마번 기준표로 쓰지 않습니다.
+    현재 선택 경주에서 신뢰 가능한 chulNo 소스만 모아 출전마 후보표를 만듭니다.
+    entry의 enNo/hrNo, horse 기본정보는 사용하지 않습니다.
     """
-    priority_keys = ["body", "gear", "today_odds", "first_odds", "second_odds", "third_odds", "odds", "corner_pace"]
+    priority_keys = ["body", "gear", "today_odds"]
     nums = set()
     names = {}
 
@@ -1111,18 +1245,19 @@ def build_candidate_base_from_all(data):
         if df is None or df.empty:
             continue
 
-        no_col = horse_no_col(df)
+        tmp = smart_current_filter(df, key)
+        no_col = horse_no_col(tmp)
         if not no_col:
             continue
 
-        tmp = df.copy()
+        tmp = tmp.copy()
         tmp["_tmp_no"] = pd.to_numeric(tmp[no_col], errors="coerce")
-        tmp = tmp[tmp["_tmp_no"].between(1, 30, inclusive="both")]
+        tmp = tmp[tmp["_tmp_no"].between(1, 14, inclusive="both")]
 
         for _, r in tmp.iterrows():
             n = int(r["_tmp_no"])
             nums.add(n)
-            for name_col in ["hrName", "마명", "horseName", "hr_name"]:
+            for name_col in ["hrName", "마명", "horseName", "hr_name", "rcName"]:
                 if name_col in tmp.columns and pd.notna(r.get(name_col, None)):
                     names[n] = str(r.get(name_col))
                     break
@@ -1345,7 +1480,7 @@ def is_valid_combo_text(x):
     except Exception:
         return False
 
-if auto_save_reco and result and current_race_ready(result) and is_valid_combo_text(result.get("공격삼쌍승","")) and int(result.get("신뢰도",0)) > 0:
+if auto_save_reco and result and result.get("공격삼쌍승","-") != "-" and current_race_ready(result) and is_valid_combo_text(result.get("공격삼쌍승","")) and int(result.get("신뢰도",0)) > 0:
     append_table(RECO_FILE, {
         "저장시각":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "날짜":target_date if "target_date" in globals() else today(),
@@ -1590,7 +1725,7 @@ try:
     if sheets_enabled():
         st.success("Google Sheets 허브 사용 중: PC/모바일 기록 공유")
     else:
-        st.info("Google Sheets 허브 미설정: 현재는 로컬 저장만 사용")
+        st.info("Google Sheets 허브 미설정: Streamlit Secrets에 SHEET_ID와 SERVICE_ACCOUNT_JSON을 넣어야 PC/모바일 실시간 공유가 됩니다.")
 except Exception:
     st.info("허브 상태 확인 대기")
 
