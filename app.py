@@ -385,7 +385,7 @@ section[data-testid="stSidebar"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.caption("현재경주 자동필터 · chulNo 1~14만 사용 · 관망 시 조합 숨김 · 허브 연동")
+st.caption("chulNo 전용 점수표 · 1~14번만 추천 허용 · enNo/hrNo/chaksun 차단")
 st.info("허브 실시간 구조: API 수집 → Google Sheets 허브 저장 → PC/모바일 불러오기 → 분석/추천/학습")
 
 st.sidebar.header("MARU KRA 저장형")
@@ -1454,7 +1454,132 @@ data = st.session_state["data"]
 env = st.session_state["env"]
 errors = st.session_state["errors"]
 
+
+def valid_chulno_base(data):
+    trusted = ["body", "gear", "today_odds"]
+    nums = {}
+    evidence = {}
+
+    for key in trusted:
+        df = data.get(key, pd.DataFrame())
+        if df is None or df.empty:
+            continue
+
+        try:
+            tmp = smart_current_filter(df, key)
+        except Exception:
+            tmp = df.copy()
+
+        if tmp is None or tmp.empty:
+            continue
+
+        chul_cols = []
+        for c in tmp.columns:
+            cl = str(c).lower()
+            if cl == "chulno" or str(c) in ["chulNo", "출전번호", "출전마번", "마번"]:
+                chul_cols.append(c)
+
+        if not chul_cols:
+            continue
+
+        col = chul_cols[0]
+        tmp = tmp.copy()
+        tmp["_valid_chulno"] = pd.to_numeric(tmp[col], errors="coerce")
+        tmp = tmp[tmp["_valid_chulno"].between(1, 14, inclusive="both")]
+
+        for _, r in tmp.iterrows():
+            n = int(r["_valid_chulno"])
+            name = f"{n}번"
+            for nc in ["hrName", "마명", "horseName", "rcName"]:
+                if nc in tmp.columns and pd.notna(r.get(nc, None)) and str(r.get(nc)).strip():
+                    name = str(r.get(nc)).strip()
+                    break
+            nums[n] = name
+            evidence.setdefault(n, set()).add(key)
+
+    rows = []
+    for n in sorted(nums.keys()):
+        ev = ",".join(sorted(evidence.get(n, [])))
+        base_score = 50 + len(evidence.get(n, [])) * 5
+        rows.append({"마번": n, "마명": nums[n], "점수": base_score, "근거": ev})
+    return pd.DataFrame(rows)
+
+def valid_combo_only(combo):
+    try:
+        parts = [int(x.strip()) for x in str(combo).replace("/", "-").split("-") if str(x).strip()]
+        return len(parts) == 3 and len(set(parts)) == 3 and all(1 <= n <= 14 for n in parts)
+    except Exception:
+        return False
+
+def combo_inside_valid_nums(combo, valid_nums):
+    try:
+        parts = [int(x.strip()) for x in str(combo).replace("/", "-").split("-") if str(x).strip()]
+        return len(parts) == 3 and all(n in valid_nums for n in parts)
+    except Exception:
+        return False
+
+def filter_combos_to_valid(combos, valid_nums):
+    if not combos:
+        return []
+    valid_nums = set(int(x) for x in valid_nums)
+    out = []
+    for c in combos:
+        try:
+            combo_text = c.get("조합", c.get("combo", c.get("공격삼쌍승", "")))
+            if valid_combo_only(combo_text) and combo_inside_valid_nums(combo_text, valid_nums):
+                out.append(c)
+        except Exception:
+            pass
+    return out
+
+def force_chulno_only_after_analysis(data, score_df, result, combos):
+    base = valid_chulno_base(data)
+
+    if base.empty or len(base) < 3:
+        if result:
+            result["판정"] = "관망"
+            result["추천금액"] = 0
+            result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
+            result["공격삼쌍승"] = "-"
+            result["방어삼복승"] = "-"
+            result["보조삼쌍승"] = "-"
+            result["예상배당"] = 0
+            result["자금상태"] = "현재 경주 chulNo 부족 / 점수표 생성 차단"
+        return base, result, []
+
+    valid_nums = set(base["마번"].astype(int).tolist())
+    clean_score = base.copy()
+
+    # 기존 점수표에 같은 마번이 있을 때만 점수 반영
+    try:
+        if score_df is not None and not score_df.empty and "마번" in score_df.columns:
+            tmp = score_df.copy()
+            tmp["마번"] = pd.to_numeric(tmp["마번"], errors="coerce")
+            tmp = tmp[tmp["마번"].isin(valid_nums)]
+            if "점수" in tmp.columns and not tmp.empty:
+                score_map = dict(zip(tmp["마번"].astype(int), tmp["점수"]))
+                clean_score["점수"] = clean_score["마번"].map(score_map).fillna(clean_score["점수"])
+    except Exception:
+        pass
+
+    clean_combos = filter_combos_to_valid(combos, valid_nums)
+
+    if result:
+        combo = result.get("공격삼쌍승", "")
+        if (not valid_combo_only(combo)) or (not combo_inside_valid_nums(combo, valid_nums)):
+            result["판정"] = "관망"
+            result["추천금액"] = 0
+            result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
+            result["공격삼쌍승"] = "-"
+            result["방어삼복승"] = "-"
+            result["보조삼쌍승"] = "-"
+            result["예상배당"] = 0
+            result["자금상태"] = "현재 경주 출전마 외 조합 차단"
+
+    return clean_score, result, clean_combos
+
 score_df, result, combos = analyze(data, env)
+score_df, result, combos = force_chulno_only_after_analysis(data, score_df, result, combos)
 if result and not current_race_ready(result):
     result["판정"] = "관망"
     result["추천금액"] = 0
@@ -1480,7 +1605,7 @@ def is_valid_combo_text(x):
     except Exception:
         return False
 
-if auto_save_reco and result and result.get("공격삼쌍승","-") != "-" and current_race_ready(result) and is_valid_combo_text(result.get("공격삼쌍승","")) and int(result.get("신뢰도",0)) > 0:
+if auto_save_reco and result and result.get("공격삼쌍승","-") != "-" and valid_combo_only(result.get("공격삼쌍승","")) and current_race_ready(result) and is_valid_combo_text(result.get("공격삼쌍승","")) and int(result.get("신뢰도",0)) > 0:
     append_table(RECO_FILE, {
         "저장시각":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "날짜":target_date if "target_date" in globals() else today(),
@@ -1642,9 +1767,10 @@ with st.expander("숨겨진 분석 / 저장 데이터"):
         st.write("entry 데이터 없음")
 
     st.subheader("API 연결 데이터 행수")
+    st.caption("점수표와 추천은 body/gear/today_odds의 chulNo만 사용합니다. enNo/hrNo/chaksun은 마번으로 쓰지 않습니다.")
     st.dataframe(pd.DataFrame([{"API":k, "행수":len(v)} for k, v in data.items()]), use_container_width=True)
 
-    st.subheader("말별 점수표")
+    st.subheader("말별 점수표(chulNo)")
     st.dataframe(score_df, use_container_width=True)
 
     st.subheader("삼쌍승 시뮬레이션")
@@ -1674,7 +1800,7 @@ with st.expander("숨겨진 분석 / 저장 데이터"):
 st.divider()
 st.subheader("PC 상세 분석 패널")
 
-tab_score, tab_sim, tab_api, tab_logs = st.tabs(["말별 점수표", "삼쌍승 시뮬레이션", "API 원본/진단", "과거 로그"])
+tab_score, tab_sim, tab_api, tab_logs = st.tabs(["말별 점수표(chulNo)", "삼쌍승 시뮬레이션", "API 원본/진단", "과거 로그"])
 
 with tab_score:
     try:
