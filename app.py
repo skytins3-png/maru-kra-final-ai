@@ -26,6 +26,9 @@ DATA_DIR.mkdir(exist_ok=True)
 LOCAL_HUB_FILE = DATA_DIR / "maru_kra_hub_records.csv"
 API_STATUS_FILE = DATA_DIR / "maru_kra_api_status.csv"
 LOCAL_SETTINGS_FILE = DATA_DIR / "maru_kra_local_settings.json"
+SCHEDULE_HUB_FILE = DATA_DIR / "maru_kra_schedule_hub.csv"
+BIGDATA_FILE = DATA_DIR / "maru_kra_bigdata_result_log.csv"
+AUTO_RUN_STATE_FILE = DATA_DIR / "maru_kra_auto_run_state.json"
 
 # 사용자가 올린 NO_REINPUT 원본 ZIP에서 추출한 실제 API 기본 URL
 FORCE_DEFAULT_URLS = {'race_url': 'https://apis.data.go.kr/B551015/API186_1/SeoulRace_1', 'entry_url': 'https://apis.data.go.kr/B551015/API23_1/entryRaceHorse_1', 'horse_url': 'https://apis.data.go.kr/B551015/API310/raceHorseInfo', 'body_url': 'https://apis.data.go.kr/B551015/API25_1/raceHorseBody', 'gear_url': 'https://apis.data.go.kr/B551015/API24_1/raceHorseGear', 'rating_url': 'https://apis.data.go.kr/B551015/API77/raceHorseRating', 'odds_url': 'https://apis.data.go.kr/B551015/API28_1/Dividend_rate', 'today_odds_url': 'https://apis.data.go.kr/B551015/API301/Dividend_rate_total', 'result_detail_url': 'https://apis.data.go.kr/B551015/API299_1/raceResultDetail_1', 'race_record_url': 'https://apis.data.go.kr/B551015/API214_1/raceRecord_1', 'start_exam_url': 'https://apis.data.go.kr/B551015/API76_1/startExamResult_1', 'judge_url': 'https://apis.data.go.kr/B551015/API72_1/raceJudge_1', 'jockey_change_url': 'https://apis.data.go.kr/B551015/API71_1/jockeyChange_1', 'weather_alert_url': 'https://apis.data.go.kr/1360000/WthrWrnInfoService/getPwnStatus', 'corner_pace_url': 'https://apis.data.go.kr/B551015/API303/corner_rank', 'popularity_url': 'https://apis.data.go.kr/B551015/API302/popularity', 'first_odds_url': 'https://apis.data.go.kr/B551015/API27_1/winPredictionRateInfo_1', 'second_odds_url': 'https://apis.data.go.kr/B551015/API29_1/doublePredictionRateInfo_1', 'third_odds_url': 'https://apis.data.go.kr/B551015/API30_1/triplePredictionRateInfo_1'}
@@ -604,6 +607,295 @@ def hub_read_sheet(sheet_name, limit=100):
     except Exception:
         return pd.DataFrame()
 
+
+def load_auto_state():
+    try:
+        if AUTO_RUN_STATE_FILE.exists():
+            return json.loads(AUTO_RUN_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def save_auto_state(state):
+    try:
+        AUTO_RUN_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+def append_csv(path, row):
+    old = pd.DataFrame()
+    if path.exists():
+        try:
+            old = pd.read_csv(path)
+        except Exception:
+            old = pd.DataFrame()
+    new = pd.concat([old, pd.DataFrame([row])], ignore_index=True)
+    new.to_csv(path, index=False, encoding="utf-8-sig")
+    return len(new)
+
+def load_csv(path):
+    if path.exists():
+        try:
+            return pd.read_csv(path)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+def parse_time_to_dt(rc_date, time_text):
+    s = str(time_text or "").strip()
+    if not s:
+        return None
+    for fmt in ["%H:%M", "%H%M", "%H:%M:%S"]:
+        try:
+            t = datetime.strptime(s, fmt).time()
+            d = datetime.strptime(str(rc_date), "%Y%m%d").date()
+            return datetime(d.year, d.month, d.day, t.hour, t.minute, t.second, tzinfo=KST)
+        except Exception:
+            pass
+    return None
+
+def guess_race_time(race_no):
+    # 실제 경주정보 API에서 출발시간이 없을 때만 쓰는 보조값
+    base_hour = 10
+    base_min = 35
+    total = base_hour * 60 + base_min + (int(race_no) - 1) * 35
+    return f"{total//60:02d}:{total%60:02d}"
+
+def extract_race_schedule(data, rc_date, default_meet):
+    race_df = data.get("race_url", pd.DataFrame())
+    rows = []
+    if race_df is not None and not race_df.empty:
+        df = current_filter(race_df, rc_date, default_meet, 1)
+        rc_col = find_col(df, ["rcNo", "raceNo", "경주번호"])
+        meet_col = find_col(df, ["meet", "meetCd", "rcourse", "경마장"])
+        time_col = find_col(df, ["rcTime", "raceTime", "출발시간", "startTime", "발주시각"])
+        dist_col = find_col(df, ["distance", "거리", "rcDist"])
+        if rc_col:
+            for _, r in df.iterrows():
+                try:
+                    rn = int(float(r.get(rc_col)))
+                except Exception:
+                    continue
+                meet = normalize_meet(r.get(meet_col, default_meet)) if meet_col else default_meet
+                rt = str(r.get(time_col, "")).strip() if time_col else guess_race_time(rn)
+                rows.append({
+                    "날짜": rc_date,
+                    "경마장": meet,
+                    "경주번호": rn,
+                    "출발시간": rt if rt else guess_race_time(rn),
+                    "거리": r.get(dist_col, "") if dist_col else "",
+                    "소스": "race_api",
+                })
+    if not rows:
+        # 경주정보 API가 비어도 지역별 기본 시간표를 만들어 30분 전 자동 분석이 가능하게 함
+        for meet in ["서울", "부산경남", "제주"]:
+            for rn in range(1, 12):
+                rows.append({
+                    "날짜": rc_date,
+                    "경마장": meet,
+                    "경주번호": rn,
+                    "출발시간": guess_race_time(rn),
+                    "거리": "",
+                    "소스": "fallback",
+                })
+    return pd.DataFrame(rows).drop_duplicates(subset=["날짜","경마장","경주번호"], keep="first")
+
+def save_schedule_to_hub(schedule_df):
+    if schedule_df is None or schedule_df.empty:
+        return 0
+    old = load_csv(SCHEDULE_HUB_FILE)
+    new = pd.concat([old, schedule_df], ignore_index=True)
+    new = new.drop_duplicates(subset=["날짜","경마장","경주번호"], keep="last")
+    new.to_csv(SCHEDULE_HUB_FILE, index=False, encoding="utf-8-sig")
+    # 구글시트도 가능하면 저장
+    try:
+        for _, row in schedule_df.iterrows():
+            hub_append_sheet("race_schedule", row.to_dict())
+    except Exception:
+        pass
+    return len(new)
+
+def analyze_one_race(rc_date, meet, race_no, selected_keys, sim_count, risk_mode, reason="manual"):
+    data, status = fetch_all_live(rc_date, meet, int(race_no), selected_keys)
+    env = fetch_weather(meet)
+    base = build_base_horses(data, rc_date, meet, int(race_no))
+    horses = merge_score_features(base, data, rc_date, meet, int(race_no))
+    score_df, result, combos = score_and_recommend(horses, env, sim_count, risk_mode)
+    live_rows = sum(len(v) for v in data.values()) if data else 0
+    row = {
+        "저장시각": now_str(),
+        "자동사유": reason,
+        "날짜": rc_date,
+        "경마장": meet,
+        "경주번호": int(race_no),
+        "판정": result.get("판정",""),
+        "공격삼쌍승": result.get("공격삼쌍승",""),
+        "방어삼복승": result.get("방어삼복승",""),
+        "예상배당": result.get("예상배당",""),
+        "신뢰도": result.get("신뢰도",""),
+        "추천금액": result.get("추천금액",""),
+        "날씨": env.get("날씨",""),
+        "주로": env.get("주로",""),
+        "모래": env.get("모래",""),
+        "바람": env.get("바람",""),
+        "실시간행수": live_rows,
+        "근거": result.get("근거",""),
+        "결과상태": "대기",
+        "성공실패": "",
+        "실제결과": "",
+        "복기메모": "",
+    }
+    append_local_hub(row)
+    append_csv(BIGDATA_FILE, row)
+    try:
+        hub_append_sheet("recommendations", row)
+        hub_append_sheet("bigdata_result_log", row)
+    except Exception:
+        pass
+    return data, status, score_df, result, combos, row
+
+def get_result_for_race(rc_date, meet, race_no):
+    # 결과/배당 API에서 현재 경주 결과 후보를 찾음
+    result_keys = ["result_detail_url", "race_record_url", "today_odds_url", "first_odds_url", "second_odds_url", "third_odds_url"]
+    data = {}
+    for key in result_keys:
+        df, msg, used_url = fetch_one_api(key, rc_date, meet, int(race_no))
+        if df is not None and not df.empty:
+            data[key] = current_filter(df, rc_date, meet, int(race_no))
+    return data
+
+def extract_actual_top3(result_data):
+    # 여러 API 컬럼명을 방어적으로 읽어 실제 1/2/3착 마번을 추출
+    for key, df in result_data.items():
+        if df is None or df.empty:
+            continue
+        # 한 행에 1/2/3착 컬럼이 있는 경우
+        cols1 = ["winChulNo", "firstChulNo", "ord1", "first", "1착", "one"]
+        cols2 = ["secondChulNo", "ord2", "second", "2착", "two"]
+        cols3 = ["thirdChulNo", "ord3", "third", "3착", "three"]
+        c1, c2, c3 = find_col(df, cols1), find_col(df, cols2), find_col(df, cols3)
+        if c1 and c2 and c3:
+            r = df.iloc[0]
+            try:
+                return [int(float(r[c1])), int(float(r[c2])), int(float(r[c3]))]
+            except Exception:
+                pass
+        # 순위 행 구조인 경우
+        no_col = horse_no_col(df)
+        rank_col = find_col(df, ["ord", "rank", "chaksun", "순위", "착순"])
+        if no_col and rank_col:
+            tmp = df.copy()
+            tmp["_rank"] = pd.to_numeric(tmp[rank_col], errors="coerce")
+            tmp["_no"] = pd.to_numeric(tmp[no_col], errors="coerce")
+            tmp = tmp.dropna(subset=["_rank","_no"]).sort_values("_rank")
+            top = tmp[tmp["_rank"].isin([1,2,3])].head(3)["_no"].astype(int).tolist()
+            if len(top) == 3:
+                return top
+    return []
+
+def update_bigdata_results(rc_date, meet="", race_no=None):
+    df = load_csv(BIGDATA_FILE)
+    if df.empty:
+        return 0, "빅데이터 로그 없음"
+    updated = 0
+    for idx, row in df.iterrows():
+        if str(row.get("결과상태","")) == "확정":
+            continue
+        if str(row.get("날짜","")) != str(rc_date):
+            continue
+        if meet and str(row.get("경마장","")) != str(meet):
+            continue
+        if race_no is not None:
+            try:
+                if int(row.get("경주번호")) != int(race_no):
+                    continue
+            except Exception:
+                continue
+        rmeet = str(row.get("경마장",""))
+        rrace = int(row.get("경주번호"))
+        result_data = get_result_for_race(rc_date, rmeet, rrace)
+        top3 = extract_actual_top3(result_data)
+        if not top3:
+            continue
+        pred = [int(x.strip()) for x in str(row.get("공격삼쌍승","")).replace("/", "-").split("-") if str(x).strip().isdigit()]
+        success = "성공" if pred == top3 else "실패"
+        df.loc[idx, "결과상태"] = "확정"
+        df.loc[idx, "성공실패"] = success
+        df.loc[idx, "실제결과"] = " - ".join(map(str, top3))
+        df.loc[idx, "복기메모"] = f"예상 {row.get('공격삼쌍승','')} / 실제 {' - '.join(map(str, top3))}"
+        updated += 1
+    df.to_csv(BIGDATA_FILE, index=False, encoding="utf-8-sig")
+    try:
+        # 시트에는 전체를 다시 쓰기 어렵기 때문에 확정 rows만 추가 로그로 저장
+        for _, r in df[df["결과상태"].astype(str) == "확정"].tail(updated).iterrows():
+            hub_append_sheet("bigdata_result_log", r.to_dict())
+    except Exception:
+        pass
+    return updated, f"{updated}건 결과 업데이트"
+
+def due_races_from_schedule(rc_date, now_dt, minutes_before=30):
+    schedule = load_csv(SCHEDULE_HUB_FILE)
+    if schedule.empty:
+        return pd.DataFrame()
+    s = schedule[schedule["날짜"].astype(str) == str(rc_date)].copy()
+    if s.empty:
+        return s
+    due_rows = []
+    for _, r in s.iterrows():
+        race_dt = parse_time_to_dt(rc_date, r.get("출발시간",""))
+        if race_dt is None:
+            continue
+        diff_min = (race_dt - now_dt).total_seconds() / 60
+        if 0 <= diff_min <= minutes_before:
+            due_rows.append(r.to_dict())
+    return pd.DataFrame(due_rows)
+
+def auto_scheduler_tick(rc_date, selected_keys, sim_count, risk_mode, enabled=True):
+    """
+    Streamlit은 사용자가 앱을 열어야 실행됩니다.
+    이 함수는 앱이 열려 있을 때만 09:00 1회, 경주 30분 전 자동 분석/허브저장을 수행합니다.
+    """
+    if not enabled:
+        return []
+    state = load_auto_state()
+    events = []
+    now_dt = now_kst()
+    today_key = str(rc_date)
+
+    # 1) 아침 9시 이후 하루 1회: 경주시간표 수집/허브 저장
+    morning_key = f"morning_schedule_{today_key}"
+    if now_dt.hour >= 9 and not state.get(morning_key):
+        data, status = fetch_all_live(rc_date, "서울", 1, ["race_url"])
+        schedule = extract_race_schedule(data, rc_date, "서울")
+        n = save_schedule_to_hub(schedule)
+        state[morning_key] = now_str()
+        events.append(f"09시 이후 시간표 허브 저장 완료: {n}건")
+        save_auto_state(state)
+
+    # 2) 경주 30분 전: 해당 경마장/경주 자동 분석 저장
+    due = due_races_from_schedule(rc_date, now_dt, 30)
+    if not due.empty:
+        for _, r in due.iterrows():
+            meet = str(r.get("경마장","서울"))
+            race_no = int(r.get("경주번호", 1))
+            k = f"pre30_{today_key}_{meet}_{race_no}"
+            if state.get(k):
+                continue
+            analyze_one_race(rc_date, meet, race_no, selected_keys, sim_count, risk_mode, reason="경주30분전자동")
+            state[k] = now_str()
+            events.append(f"{meet} {race_no}R 30분 전 분석/허브저장 완료")
+        save_auto_state(state)
+
+    # 3) 결과 업데이트: 경주 시간이 지난 로그는 결과 API 확인 후 성공/실패 저장
+    try:
+        updated, msg = update_bigdata_results(rc_date)
+        if updated:
+            events.append(msg)
+    except Exception as e:
+        events.append(f"결과 업데이트 보류: {str(e)[:80]}")
+    return events
+
+
 def fetch_all_live(rc_date, meet, race_no, selected_keys):
     data = {}
     statuses = []
@@ -667,7 +959,9 @@ def render():
         race_no = st.number_input("경주번호", min_value=1, max_value=20, value=1, step=1)
         sim_count = st.slider("시뮬레이션", 300, 5000, 1200, step=100)
         risk_mode = st.selectbox("전략", ["균형형","안전형","공격형"], index=0)
-        auto_refresh = st.selectbox("자동 새로고침", [0, 30, 60, 120, 300], index=0)
+        auto_refresh = st.selectbox("자동 새로고침", [0, 30, 60, 120, 300], index=1)
+        auto_schedule_enabled = st.checkbox("자동 허브 스케줄 실행", value=True)
+        st.caption("아침 9시 이후 1회 시간표 저장 · 경주 30분 전 자동 분석/허브저장")
         st.divider()
         core_default = ["race_url","entry_url","body_url","rating_url","today_odds_url","jockey_change_url","corner_pace_url","popularity_url"]
         selected = st.multiselect(
@@ -685,8 +979,23 @@ def render():
     rc_date = str(target_date).replace("-","").strip() or today_kst()
 
     if auto_refresh:
-        st.caption(f"자동 새로고침 {auto_refresh}초")
-        time.sleep(0.1)
+        st.caption(f"자동 새로고침 {auto_refresh}초 · 앱이 열려 있을 때만 자동 실행")
+        # Streamlit Cloud는 백그라운드 상시 실행 보장이 약해서, 화면이 열려 있을 때마다 점검합니다.
+        try:
+            from streamlit_autorefresh import st_autorefresh
+            st_autorefresh(interval=int(auto_refresh) * 1000, key="maru_auto_refresh")
+        except Exception:
+            time.sleep(0.1)
+
+    scheduler_events = auto_scheduler_tick(
+        rc_date,
+        selected,
+        sim_count,
+        risk_mode,
+        enabled=auto_schedule_enabled
+    )
+    for ev in scheduler_events:
+        st.success(ev)
 
     local_hub = load_local_hub()
     c1, c2, c3, c4 = st.columns(4)
@@ -695,7 +1004,7 @@ def render():
     c3.metric("경주", f"{meet} {int(race_no)}R")
     c4.metric("날짜", rc_date)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🏇 실시간 분석", "📦 허브", "🔌 API 진단", "📘 Secrets"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏇 실시간 분석", "📦 허브", "🔌 API 진단", "📊 시간표/빅데이터", "📘 Secrets"])
 
     with tab1:
         st.markdown("### 실시간 KRA 분석")
@@ -762,12 +1071,21 @@ def render():
                     "실시간행수": live_rows,
                     "근거": result.get("근거",""),
                 }
+                row.setdefault("결과상태", "대기")
+                row.setdefault("성공실패", "")
+                row.setdefault("실제결과", "")
+                row.setdefault("복기메모", "")
                 n = append_local_hub(row)
+                append_csv(BIGDATA_FILE, row)
                 ok, msg = hub_append_sheet("recommendations", row)
+                try:
+                    hub_append_sheet("bigdata_result_log", row)
+                except Exception:
+                    pass
                 if ok:
-                    st.success(f"허브 저장 완료: Google Sheet + 로컬 {n}건")
+                    st.success(f"허브 저장 완료: Google Sheet + 로컬 {n}건 + 빅데이터")
                 else:
-                    st.info(f"로컬 허브 저장 완료 {n}건 / Google Sheet: {msg}")
+                    st.info(f"로컬 허브 저장 완료 {n}건 + 빅데이터 / Google Sheet: {msg}")
 
         with right:
             m1,m2,m3 = st.columns(3)
@@ -800,6 +1118,36 @@ def render():
         st.dataframe(pd.DataFrame([{"API":label, "key":k, "URL":get_url(k)} for k,label in API_LABELS]), use_container_width=True)
 
     with tab4:
+        st.markdown("### 경주 시간표 / 빅데이터 복기")
+        col_s1, col_s2, col_s3 = st.columns(3)
+        with col_s1:
+            if st.button("오늘 시간표 지금 수집/허브저장", use_container_width=True):
+                data_s, status_s = fetch_all_live(rc_date, meet, int(race_no), ["race_url"])
+                schedule_df = extract_race_schedule(data_s, rc_date, meet)
+                n = save_schedule_to_hub(schedule_df)
+                st.success(f"시간표 저장 완료: {n}건")
+        with col_s2:
+            if st.button("현재 경주 결과 업데이트", use_container_width=True):
+                updated, msg = update_bigdata_results(rc_date, meet, int(race_no))
+                st.success(msg)
+        with col_s3:
+            if st.button("오늘 전체 결과 업데이트", use_container_width=True):
+                updated, msg = update_bigdata_results(rc_date)
+                st.success(msg)
+
+        st.write("#### 저장된 경주 시간표")
+        st.dataframe(load_csv(SCHEDULE_HUB_FILE).tail(200), use_container_width=True, height=300)
+
+        st.write("#### 추천/결과 빅데이터")
+        big_df = load_csv(BIGDATA_FILE)
+        st.dataframe(big_df.tail(300), use_container_width=True, height=360)
+
+        if not big_df.empty and "성공실패" in big_df.columns:
+            st.write("#### 성공/실패 요약")
+            summary = big_df.groupby(["경마장","성공실패"], dropna=False).size().reset_index(name="건수")
+            st.dataframe(summary, use_container_width=True)
+
+    with tab5:
         st.markdown("""
 ### Streamlit Secrets 예시
 

@@ -1,26 +1,26 @@
-# MARU KRA REALTIME 19API HUB - KEY SAVE + KST
+# MARU KRA SCHEDULED HUB BIGDATA KST
 
 ## 이번 수정
-- 공공데이터 API Key 입력란 추가
-- 화면 표시: `공공데이터 API Key: ************`
-- `[API Key 저장]` 버튼 추가
-- 저장한 키를 앱 내부 `maru_kra_data/maru_kra_local_settings.json`에 저장
-- Streamlit Secrets에 키가 있으면 자동 불러오기
-- 모든 시간 표시를 한국시간(KST) 기준으로 표시
-- 원본 `MARU_KRA_NO_REINPUT_API_ENGINE(1).zip`의 19개 API URL 유지
-- 실시간 API 호출 / API 진단 / 허브 저장 불러오기 유지
+- 한국시간(KST) 기준 자동 스케줄 기능 추가
+- 아침 9시 이후 하루 1회 경주시간표 수집 후 허브 저장
+- 경주시간표 기준 출발 30분 전 자동 분석 후 허브 저장
+- 경주별 추천 결과를 빅데이터 로그에 저장
+- 결과 API에서 실제 결과를 확인해 성공/실패/복기메모 저장
+- 지역 경마장을 시간표에서 자동 인식해 저장
+- 24시간 실시간 호출이 아니라 필요한 시간에만 호출하도록 설계
+- 앱이 열려 있을 때 자동 점검하며, 자동 새로고침으로 30/60/120초마다 체크 가능
+
+## 중요
+Streamlit 앱은 사용자가 앱을 열어야 실행됩니다.
+완전한 서버 백그라운드 09:00 자동 실행을 원하면 GitHub Actions, cron-job.org, UptimeRobot 같은 외부 스케줄러가 앱 주소를 호출해야 합니다.
 
 ## 업로드
 1. ZIP 압축 풀기
-2. GitHub 저장소에 `app.py`, `requirements.txt`, `README.md` 업로드해서 덮어쓰기
+2. GitHub 저장소에 app.py, requirements.txt, README.md 업로드해서 덮어쓰기
 3. Commit changes
 4. Streamlit Cloud Reboot
 
-## 참고
-화면에서 키를 저장하면 같은 Streamlit 서버에서는 유지됩니다.
-Streamlit Cloud가 재배포/재시작되면 내부 파일 저장이 초기화될 수 있으니, 가장 안정적인 방식은 Secrets에도 함께 저장하는 것입니다.
-
-Secrets 예시:
-
-[maru]
-API_KEY = "공공데이터_일반인증키"
+## 앱 화면
+- 왼쪽 메뉴에서 자동 허브 스케줄 실행 ON
+- 자동 새로고침 30초 권장
+- 시간표/빅데이터 탭에서 저장된 시간표와 성공/실패 복기 확인
