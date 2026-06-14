@@ -162,6 +162,20 @@ st.sidebar.divider()
 use_sample = st.sidebar.checkbox("샘플 데이터 사용", value=False)
 st.session_state["use_sample"] = use_sample
 
+st.sidebar.divider()
+st.sidebar.subheader("환경/날씨 설정")
+auto_weather = st.sidebar.checkbox("날씨 자동수집", value=True)
+manual_weather = st.sidebar.selectbox("날씨", ["맑음", "흐림", "비", "눈", "안개"], index=1)
+manual_track = st.sidebar.selectbox("주로", ["양호", "건조", "다습", "포화", "불량"], index=0)
+manual_sand = st.sidebar.selectbox("모래", ["빠름", "보통", "무거움"], index=1)
+manual_wind = st.sidebar.selectbox("바람", ["약함", "보통", "강함"], index=1)
+st.session_state["auto_weather"] = auto_weather
+st.session_state["manual_weather"] = manual_weather
+st.session_state["manual_track"] = manual_track
+st.session_state["manual_sand"] = manual_sand
+st.session_state["manual_wind"] = manual_wind
+
+
 _force_payload = {"api_key": api_key, "target_date": target_date, "track_place": track_place, "target_rc_no": int(target_rc_no)}
 for _key, _label in FORCE_API_KEYS:
     _force_payload[_key] = globals().get(_key, "")
@@ -672,7 +686,33 @@ def fetch_api(url):
     except Exception as e:
         return pd.DataFrame(), str(e)
 
+
+# 환경/날씨 변수 기본값 보강
+auto_weather = globals().get("auto_weather", True)
+manual_weather = globals().get("manual_weather", "흐림")
+manual_track = globals().get("manual_track", "양호")
+manual_sand = globals().get("manual_sand", "보통")
+manual_wind = globals().get("manual_wind", "보통")
+
+
+# 환경 변수 별칭 보강
+weather = globals().get("weather", manual_weather)
+track = globals().get("track", manual_track)
+sand = globals().get("sand", manual_sand)
+wind = globals().get("wind", manual_wind)
+
 def fetch_env():
+    auto_weather = bool(globals().get("auto_weather", True))
+    try:
+        if "auto_weather" in st.session_state:
+            auto_weather = bool(st.session_state["auto_weather"])
+    except Exception:
+        pass
+    manual_weather = globals().get("manual_weather", st.session_state.get("manual_weather", "흐림") if "manual_weather" in st.session_state else "흐림")
+    manual_track = globals().get("manual_track", st.session_state.get("manual_track", "양호") if "manual_track" in st.session_state else "양호")
+    manual_sand = globals().get("manual_sand", st.session_state.get("manual_sand", "보통") if "manual_sand" in st.session_state else "보통")
+    manual_wind = globals().get("manual_wind", st.session_state.get("manual_wind", "보통") if "manual_wind" in st.session_state else "보통")
+
     env = {"weather":"맑음", "track":"양호", "sand":"보통", "wind":"없음", "source":"기본", "precip":0, "wind_speed":0}
     if auto_weather:
         coords = {"서울":(37.4438,127.0165), "부산경남":(35.1545,128.8782), "제주":(33.4097,126.3934)}
