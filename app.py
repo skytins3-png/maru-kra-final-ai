@@ -1,18 +1,55 @@
 
-import streamlit as st
-import pandas as pd
-import requests
+import os
 import json
-import hashlib
-import traceback
+import time
 import random
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from collections import Counter
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+
+import pandas as pd
+import requests
+import streamlit as st
+
+st.set_page_config(
+    page_title="MARU KRA 실시간 19API HUB",
+    page_icon="🏇",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
 KST = ZoneInfo("Asia/Seoul")
+DATA_DIR = Path("maru_kra_data")
+DATA_DIR.mkdir(exist_ok=True)
+LOCAL_HUB_FILE = DATA_DIR / "maru_kra_hub_records.csv"
+API_STATUS_FILE = DATA_DIR / "maru_kra_api_status.csv"
+
+# 사용자가 올린 NO_REINPUT 원본 ZIP에서 추출한 실제 API 기본 URL
+FORCE_DEFAULT_URLS = {'race_url': 'https://apis.data.go.kr/B551015/API186_1/SeoulRace_1', 'entry_url': 'https://apis.data.go.kr/B551015/API23_1/entryRaceHorse_1', 'horse_url': 'https://apis.data.go.kr/B551015/API310/raceHorseInfo', 'body_url': 'https://apis.data.go.kr/B551015/API25_1/raceHorseBody', 'gear_url': 'https://apis.data.go.kr/B551015/API24_1/raceHorseGear', 'rating_url': 'https://apis.data.go.kr/B551015/API77/raceHorseRating', 'odds_url': 'https://apis.data.go.kr/B551015/API28_1/Dividend_rate', 'today_odds_url': 'https://apis.data.go.kr/B551015/API301/Dividend_rate_total', 'result_detail_url': 'https://apis.data.go.kr/B551015/API299_1/raceResultDetail_1', 'race_record_url': 'https://apis.data.go.kr/B551015/API214_1/raceRecord_1', 'start_exam_url': 'https://apis.data.go.kr/B551015/API76_1/startExamResult_1', 'judge_url': 'https://apis.data.go.kr/B551015/API72_1/raceJudge_1', 'jockey_change_url': 'https://apis.data.go.kr/B551015/API71_1/jockeyChange_1', 'weather_alert_url': 'https://apis.data.go.kr/1360000/WthrWrnInfoService/getPwnStatus', 'corner_pace_url': 'https://apis.data.go.kr/B551015/API303/corner_rank', 'popularity_url': 'https://apis.data.go.kr/B551015/API302/popularity', 'first_odds_url': 'https://apis.data.go.kr/B551015/API27_1/winPredictionRateInfo_1', 'second_odds_url': 'https://apis.data.go.kr/B551015/API29_1/doublePredictionRateInfo_1', 'third_odds_url': 'https://apis.data.go.kr/B551015/API30_1/triplePredictionRateInfo_1'}
+
+API_LABELS = [
+    ("race_url", "경주정보"),
+    ("entry_url", "출전등록말"),
+    ("horse_url", "경주마정보"),
+    ("body_url", "출전마 체중"),
+    ("gear_url", "장구/폐출혈"),
+    ("rating_url", "레이팅"),
+    ("odds_url", "배당/매출"),
+    ("today_odds_url", "시행당일 배당종합"),
+    ("result_detail_url", "AI 경주결과상세"),
+    ("race_record_url", "경주기록"),
+    ("start_exam_url", "출발심사"),
+    ("judge_url", "경주심판"),
+    ("jockey_change_url", "기수변경"),
+    ("weather_alert_url", "기상특보"),
+    ("corner_pace_url", "코너/주로빠르기"),
+    ("popularity_url", "인기투표"),
+    ("first_odds_url", "1착마 적중승식"),
+    ("second_odds_url", "2착마 적중승식"),
+    ("third_odds_url", "3착마 적중승식"),
+]
 
 def now_kst():
     return datetime.now(KST)
@@ -20,378 +57,451 @@ def now_kst():
 def today_kst():
     return now_kst().strftime("%Y%m%d")
 
-def now_kst_str():
+def now_str():
     return now_kst().strftime("%Y-%m-%d %H:%M:%S")
 
-
-
-# API URL 기본값: 재배포해도 다시 입력하지 않기 위한 내장값
-FORCE_DEFAULT_URLS = {
-    "race_url": "https://apis.data.go.kr/B551015/API186_1/SeoulRace_1",
-    "entry_url": "https://apis.data.go.kr/B551015/API23_1/entryRaceHorse_1",
-    "horse_url": "https://apis.data.go.kr/B551015/API310/raceHorseInfo",
-    "body_url": "https://apis.data.go.kr/B551015/API25_1/raceHorseBody",
-    "gear_url": "https://apis.data.go.kr/B551015/API24_1/raceHorseGear",
-    "rating_url": "https://apis.data.go.kr/B551015/API77/raceHorseRating",
-    "odds_url": "https://apis.data.go.kr/B551015/API28_1/Dividend_rate",
-    "today_odds_url": "https://apis.data.go.kr/B551015/API301/Dividend_rate_total",
-    "result_detail_url": "https://apis.data.go.kr/B551015/API299_1/raceResultDetail_1",
-    "race_record_url": "https://apis.data.go.kr/B551015/API214_1/raceRecord_1",
-    "start_exam_url": "https://apis.data.go.kr/B551015/API76_1/startExamResult_1",
-    "judge_url": "https://apis.data.go.kr/B551015/API72_1/raceJudge_1",
-    "jockey_change_url": "https://apis.data.go.kr/B551015/API71_1/jockeyChange_1",
-    "weather_alert_url": "https://apis.data.go.kr/1360000/WthrWrnInfoService/getPwnStatus",
-    "corner_pace_url": "https://apis.data.go.kr/B551015/API303/corner_rank",
-    "popularity_url": "https://apis.data.go.kr/B551015/API302/popularity",
-    "first_odds_url": "https://apis.data.go.kr/B551015/API27_1/winPredictionRateInfo_1",
-    "second_odds_url": "https://apis.data.go.kr/B551015/API29_1/doublePredictionRateInfo_1",
-    "third_odds_url": "https://apis.data.go.kr/B551015/API30_1/triplePredictionRateInfo_1",
-}
-
-FORCE_API_KEYS = [
-    ("race_url", "1. 경주정보 URL"),
-    ("entry_url", "2. 출전등록말 URL"),
-    ("horse_url", "3. 경주마정보 URL"),
-    ("body_url", "4. 출전마 체중 URL"),
-    ("gear_url", "5. 장구/폐출혈 URL"),
-    ("rating_url", "6. 레이팅 URL"),
-    ("odds_url", "7. 배당/매출 URL"),
-    ("today_odds_url", "8. 시행당일 배당 URL"),
-    ("result_detail_url", "9. AI 경주결과상세 URL"),
-    ("race_record_url", "10. 경주기록 URL"),
-    ("start_exam_url", "11. 출발심사 URL"),
-    ("judge_url", "12. 경주심판 URL"),
-    ("jockey_change_url", "13. 기수변경 URL"),
-    ("weather_alert_url", "14. 기상특보 URL"),
-    ("corner_pace_url", "15. 코너/주로빠르기 URL"),
-    ("popularity_url", "16. 인기투표 URL"),
-    ("first_odds_url", "17. 1착마 적중승식 URL"),
-    ("second_odds_url", "18. 2착마 적중승식 URL"),
-    ("third_odds_url", "19. 3착마 적중승식 URL"),
-]
-
-def force_secret_or_setting(key, default=""):
-    try:
-        if key in st.session_state and st.session_state[key]:
-            return st.session_state[key]
-    except Exception:
-        pass
-    try:
-        if "settings" in globals() and isinstance(settings, dict):
-            if settings.get(key):
-                return settings.get(key)
-            if settings.get(key.upper()):
-                return settings.get(key.upper())
-    except Exception:
-        pass
-    # 기존 앱에서 저장했던 설정 파일도 자동으로 읽습니다.
-    # Streamlit에 재배포해도 키/URL을 화면에 다시 입력하지 않기 위한 보강입니다.
-    try:
-        for _settings_path in [Path("maru_settings.json"), Path("maru_kra_data/api_settings.json")]:
-            if _settings_path.exists():
-                _data = json.loads(_settings_path.read_text(encoding="utf-8"))
-                if isinstance(_data, dict):
-                    if _data.get(key):
-                        return _data.get(key)
-                    if _data.get(key.upper()):
-                        return _data.get(key.upper())
-    except Exception:
-        pass
-    try:
-        if "maru" in st.secrets:
-            if key in st.secrets["maru"]:
-                return st.secrets["maru"][key]
-            if key.upper() in st.secrets["maru"]:
-                return st.secrets["maru"][key.upper()]
-    except Exception:
-        pass
-    try:
-        if key in st.secrets:
-            return st.secrets[key]
-        if key.upper() in st.secrets:
-            return st.secrets[key.upper()]
-    except Exception:
-        pass
-    try:
-        if key in FORCE_DEFAULT_URLS:
-            return FORCE_DEFAULT_URLS[key]
-    except Exception:
-        pass
-    return default
-
-
-def force_save_settings(payload):
-    try:
-        Path("maru_settings.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True
-    except Exception:
-        return False
-
-st.set_page_config(page_title="MARU KRA FORCE SIDEBAR", layout="wide", initial_sidebar_state="expanded")
-
-# ===== 강제 사이드바 복구 영역 =====
-st.sidebar.title("🐎 MARU KRA 메뉴")
-st.sidebar.caption("사이드바 강제 복구판")
-st.sidebar.success("API URL/Key 자동 적용 모드: 화면 입력 없음")
-
-api_key = str(force_secret_or_setting("api_key", force_secret_or_setting("API_KEY", ""))).strip()
-st.session_state["api_key"] = api_key
-if api_key:
-    st.sidebar.success("공공데이터 API Key 자동 적용 완료")
-else:
-    st.sidebar.warning("API Key가 Secrets/기존 설정에 없습니다. Streamlit Secrets에 API_KEY를 1회 저장하세요.")
-
-st.sidebar.divider()
-st.sidebar.subheader("분석 기준")
-target_date = st.sidebar.text_input("분석 날짜", value=str(force_secret_or_setting("target_date", today_kst())))
-track_place = st.sidebar.selectbox("경마장", ["서울", "부산경남", "제주"], index=["서울", "부산경남", "제주"].index(str(force_secret_or_setting("track_place", "서울"))) if str(force_secret_or_setting("track_place", "서울")) in ["서울", "부산경남", "제주"] else 0)
-target_rc_no = st.sidebar.number_input("경주번호", min_value=1, max_value=20, value=int(force_secret_or_setting("target_rc_no", 1) or 1), step=1)
-strict_race_filter = st.sidebar.checkbox("선택 경주만 엄격 필터", value=False)
-
-
-with st.sidebar.expander("Secrets 1회 설정 예시", expanded=False):
-    st.code("""
-[maru]
-API_KEY = "공공데이터_API_KEY"
-
-# URL은 앱 기본값을 쓰면 입력 안 해도 됩니다.
-# 필요할 때만 아래처럼 덮어쓰기 가능합니다.
-# RACE_URL = "https://apis.data.go.kr/B551015/API186_1/SeoulRace_1"
-# ENTRY_URL = "https://apis.data.go.kr/B551015/API23_1/entryRaceHorse_1"
-""", language="toml")
-
-st.sidebar.divider()
-st.sidebar.subheader("실시간 API 자동 연결")
-_auto_api_ok = 0
-for _key, _label in FORCE_API_KEYS:
-    globals()[_key] = str(force_secret_or_setting(_key, "")).strip()
-    st.session_state[_key] = globals()[_key]
-    if globals()[_key]:
-        _auto_api_ok += 1
-st.sidebar.success(f"API 주소 자동 적용: {_auto_api_ok}/{len(FORCE_API_KEYS)}개")
-with st.sidebar.expander("자동 적용된 API 상태", expanded=False):
-    for _key, _label in FORCE_API_KEYS:
-        st.write(("✅" if globals()[_key] else "⚠️") + " " + _label)
-    st.caption("URL은 앱 기본값/Secrets/기존 설정에서 자동 적용됩니다. 화면에서 다시 입력하지 않습니다.")
-
-st.sidebar.divider()
-use_sample = st.sidebar.checkbox("샘플 데이터 사용", value=False)
-st.session_state["use_sample"] = use_sample
-
-st.sidebar.divider()
-st.sidebar.subheader("환경/날씨 설정")
-auto_weather = st.sidebar.checkbox("날씨 자동수집", value=True)
-manual_weather = st.sidebar.selectbox("날씨", ["맑음", "흐림", "비", "눈", "안개"], index=1)
-manual_track = st.sidebar.selectbox("주로", ["양호", "건조", "다습", "포화", "불량"], index=0)
-manual_sand = st.sidebar.selectbox("모래", ["빠름", "보통", "무거움"], index=1)
-manual_wind = st.sidebar.selectbox("바람", ["약함", "보통", "강함"], index=1)
-st.session_state["auto_weather"] = auto_weather
-st.session_state["manual_weather"] = manual_weather
-st.session_state["manual_track"] = manual_track
-st.session_state["manual_sand"] = manual_sand
-st.session_state["manual_wind"] = manual_wind
-
-st.sidebar.divider()
-st.sidebar.subheader("거리/경주 분석 설정")
-distance_type = st.sidebar.selectbox("거리 유형", ["단거리", "중거리", "장거리"], index=1)
-race_distance = st.sidebar.number_input("경주 거리(m)", min_value=800, max_value=3200, value=1200, step=100)
-pace_type = st.sidebar.selectbox("전개 예상", ["빠름", "보통", "느림"], index=1)
-track_bias = st.sidebar.selectbox("주로 편향", ["없음", "안쪽 유리", "바깥 유리", "선행 유리", "추입 유리"], index=0)
-st.session_state["distance_type"] = distance_type
-st.session_state["race_distance"] = race_distance
-st.session_state["pace_type"] = pace_type
-st.session_state["track_bias"] = track_bias
-
-st.sidebar.divider()
-st.sidebar.subheader("자금/저장 설정")
-daily_loss_stop = st.sidebar.number_input("하루 손실 제한", min_value=0, max_value=1000000, value=30000, step=1000)
-daily_entries_limit = st.sidebar.number_input("오늘 진입 제한", min_value=0, max_value=20, value=3, step=1)
-auto_save_reco = st.sidebar.checkbox("추천 자동 저장", value=True)
-st.session_state["daily_loss_stop"] = daily_loss_stop
-st.session_state["daily_entries_limit"] = daily_entries_limit
-st.session_state["auto_save_reco"] = auto_save_reco
-
-
-
-
-_force_payload = {"api_key": api_key, "target_date": target_date, "track_place": track_place, "target_rc_no": int(target_rc_no), "distance_type": distance_type, "race_distance": int(race_distance), "pace_type": pace_type, "track_bias": track_bias}
-for _key, _label in FORCE_API_KEYS:
-    _force_payload[_key] = globals().get(_key, "")
-
-if st.sidebar.button("API 저장", use_container_width=True):
-    if force_save_settings(_force_payload):
-        st.sidebar.success("API 설정 저장 완료")
-    else:
-        st.sidebar.error("저장 실패")
-
-if st.sidebar.button("추천/비교 로그 초기화", use_container_width=True):
-    for _p in [globals().get("RECO_FILE"), globals().get("COMPARE_FILE"), globals().get("RESULT_FILE")]:
-        try:
-            if _p and _p.exists():
-                _p.unlink()
-        except Exception:
-            pass
-    st.sidebar.warning("로그 초기화 완료")
-
-if st.sidebar.button("로컬 설정 초기화", use_container_width=True):
-    try:
-        if SETTINGS_FILE.exists():
-            SETTINGS_FILE.unlink()
-        st.sidebar.warning("API 설정 초기화 완료")
-    except Exception:
-        st.sidebar.warning("초기화 시도 완료")
-
-st.sidebar.divider()
-st.sidebar.caption("왼쪽 메뉴가 안 보이면 브라우저 새로고침 또는 좌측 상단 > 아이콘 확인")
-# ===== 강제 사이드바 복구 끝 =====
-
-
-DATA_DIR = Path("maru_kra_data")
-DATA_DIR.mkdir(exist_ok=True)
-
-SETTINGS_FILE = DATA_DIR / "api_settings.json"
-RECO_FILE = DATA_DIR / "recommendation_bigdata_log.csv"
-RESULT_FILE = DATA_DIR / "race_result_records.csv"
-COMPARE_FILE = DATA_DIR / "prediction_result_compare_log.csv"
-WEIGHT_FILE = DATA_DIR / "learning_weights.json"
-
-DEFAULT_SETTINGS = {
-    "api_key": "",
-    "save_api_key": False,
-    "race_url": "",
-    "entry_url": "",
-    "horse_url": "",
-    "body_url": "",
-    "gear_url": "",
-    "rating_url": "",
-    "odds_url": "",
-    "today_odds_url": "",
-    "result_detail_url": "",
-    "race_record_url": "",
-    "start_exam_url": "",
-    "judge_url": "",
-    "jockey_change_url": "",
-    "weather_alert_url": "",
-    "corner_pace_url": "",
-    "popularity_url": "",
-    "first_odds_url": "",
-    "second_odds_url": "",
-    "third_odds_url": "",
-    "kra_url": "https://m.kra.co.kr/main.do",
-    "track_place": "서울",
-    "bankroll": 100000,
-    "unit_bet": 1000,
-    "daily_loss_limit": 30000,
-    "profit_unlock": 200000,
-    "daily_budget": 30000,
-    "daily_entries_limit": 3
-}
-
-DEFAULT_WEIGHTS = {
-    "recent": 2.2,
-    "win_rate": 0.45,
-    "place_rate": 0.30,
-    "rating": 0.55,
-    "rating_delta": 1.8,
-    "odds_value": 1.0,
-    "environment": 1.0,
-    "weight_penalty": 1.4,
-    "risk_penalty": 1.0,
-}
-
-SECRET_MAP = {
-    "api_key": ["API_KEY", "api_key"],
-    "race_url": ["RACE_URL", "race_url"],
-    "entry_url": ["ENTRY_URL", "entry_url"],
-    "horse_url": ["HORSE_URL", "horse_url"],
-    "body_url": ["BODY_URL", "body_url"],
-    "gear_url": ["GEAR_URL", "gear_url"],
-    "rating_url": ["RATING_URL", "rating_url"],
-    "odds_url": ["ODDS_URL", "odds_url"],
-    "today_odds_url": ["TODAY_ODDS_URL", "today_odds_url"],
-    "result_detail_url": ["RESULT_DETAIL_URL", "result_detail_url"],
-    "race_record_url": ["RACE_RECORD_URL", "race_record_url"],
-    "start_exam_url": ["START_EXAM_URL", "start_exam_url"],
-    "judge_url": ["JUDGE_URL", "judge_url"],
-    "jockey_change_url": ["JOCKEY_CHANGE_URL", "jockey_change_url"],
-    "weather_alert_url": ["WEATHER_ALERT_URL", "weather_alert_url"],
-    "corner_pace_url": ["CORNER_PACE_URL", "corner_pace_url"],
-    "popularity_url": ["POPULARITY_URL", "popularity_url"],
-    "first_odds_url": ["FIRST_ODDS_URL", "first_odds_url"],
-    "second_odds_url": ["SECOND_ODDS_URL", "second_odds_url"],
-    "third_odds_url": ["THIRD_ODDS_URL", "third_odds_url"],
-    "kra_url": ["KRA_URL", "kra_url"],
-}
-
-
-
-def mask_secret_url(url):
-    s = str(url or "")
-    try:
-        import re as _re
-        s = _re.sub(r"(serviceKey=)[^&]+", r"\1***", s)
-        s = _re.sub(r"(servicekey=)[^&]+", r"\1***", s)
-    except Exception:
-        if "serviceKey=" in s:
-            head, tail = s.split("serviceKey=", 1)
-            rest = tail.split("&", 1)
-            s = head + "serviceKey=***" + (("&" + rest[1]) if len(rest) > 1 else "")
-    return s
-
 def secret_get(names, default=""):
-    """
-    Streamlit Secrets에서 값 가져오기.
-    [maru] 그룹 안과 최상단 둘 다 지원합니다.
-    """
     try:
-        # st.secrets는 일반 dict처럼 접근 가능
         if "maru" in st.secrets:
             for n in names:
                 if n in st.secrets["maru"]:
                     return str(st.secrets["maru"][n])
+    except Exception:
+        pass
+    try:
         for n in names:
             if n in st.secrets:
                 return str(st.secrets[n])
     except Exception:
         pass
+    for n in names:
+        val = os.environ.get(n)
+        if val:
+            return str(val)
     return default
 
-def load_local_json(path, default):
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            merged = dict(default)
-            merged.update(data)
-            return merged
-        except Exception:
-            return dict(default)
-    return dict(default)
+def get_api_key():
+    # 화면 입력 없음. Secrets / 환경변수에서만 자동 로드.
+    return secret_get(["API_KEY", "api_key", "PUBLIC_DATA_API_KEY", "SERVICE_KEY", "serviceKey"], "")
 
-def load_settings():
-    """
-    우선순위:
-    1. DEFAULT
-    2. 앱 내부 저장파일
-    3. Streamlit Secrets
-    Secrets가 있으면 항상 최종 우선 적용.
-    """
-    s = load_local_json(SETTINGS_FILE, DEFAULT_SETTINGS)
-    for key, names in SECRET_MAP.items():
-        val = secret_get(names, "")
-        if val:
-            s[key] = val
-    if secret_get(["API_KEY", "api_key"], ""):
-        s["save_api_key"] = True
+API_KEY = get_api_key()
+
+def get_url(key):
+    # URL도 화면에 다시 입력하지 않음. Secrets에 있으면 우선, 없으면 원본 ZIP 기본값 사용.
+    val = secret_get([key, key.upper()], "")
+    if val:
+        return val
+    return FORCE_DEFAULT_URLS.get(key, "")
+
+def mask_key(s):
+    s = str(s or "")
+    key = str(API_KEY or "")
+    if key and key in s:
+        s = s.replace(key, key[:5] + "****" + key[-4:])
     return s
 
-def save_json(path, data):
-    path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+def css():
+    st.markdown("""
+<style>
+.main .block-container {padding-top: 1rem; max-width: 1200px;}
+.hero {
+  background: linear-gradient(135deg,#f3fff1,#ffffff,#eef7ff);
+  border:1px solid rgba(0,0,0,.08); border-radius:20px;
+  padding:18px 20px; box-shadow:0 6px 22px rgba(0,0,0,.06);
+}
+.green {
+  background:#efffed; border:1px solid rgba(35,130,55,.18); border-radius:20px;
+  padding:18px 20px; box-shadow:0 5px 18px rgba(0,0,0,.05);
+}
+.combo {font-size:46px; font-weight:900; color:#13662d; letter-spacing:1px;}
+.muted {color:#666; font-size:13px;}
+.stButton > button {width:100%; border-radius:12px; min-height:44px; font-weight:800;}
+</style>
+""", unsafe_allow_html=True)
+
+def add_or_replace_params(url, params):
+    parsed = urlparse(url)
+    q = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    for k, v in params.items():
+        if v is not None and str(v) != "":
+            q[k] = str(v)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(q, doseq=True), parsed.fragment))
+
+def endpoint_with_placeholders(url, rc_date, meet, race_no):
+    key = API_KEY or ""
+    repl = {
+        "{serviceKey}": key, "{SERVICE_KEY}": key, "{api_key}": key, "{API_KEY}": key,
+        "{today}": rc_date, "{ymd}": rc_date, "{rcDate}": rc_date, "{raceDate}": rc_date,
+        "{raceNo}": str(race_no), "{rcNo}": str(race_no),
+        "{meet}": meet, "{track_place}": meet,
+    }
+    out = str(url or "")
+    for a, b in repl.items():
+        out = out.replace(a, b)
+    return out
+
+def request_variants(base_url, rc_date, meet, race_no):
+    url = endpoint_with_placeholders(base_url, rc_date, meet, race_no)
+    key = API_KEY or ""
+    base_params = {"serviceKey": key, "pageNo": 1, "numOfRows": 100}
+    variants = []
+
+    p1 = dict(base_params); p1["resultType"] = "json"
+    variants.append(add_or_replace_params(url, p1))
+
+    p2 = dict(base_params); p2["_type"] = "json"
+    variants.append(add_or_replace_params(url, p2))
+
+    for date_name in ["rcDate", "raceDate", "meetDate"]:
+        for race_name in ["rcNo", "raceNo"]:
+            p = dict(base_params)
+            p.update({date_name: rc_date, race_name: race_no, "resultType": "json"})
+            variants.append(add_or_replace_params(url, p))
+
+    meet_map = {"서울":"1", "제주":"2", "부산경남":"3", "부경":"3"}
+    for meet_name in ["meet", "meetCd", "rcourse"]:
+        p = dict(base_params)
+        p.update({"rcDate": rc_date, "rcNo": race_no, meet_name: meet_map.get(meet, meet), "resultType": "json"})
+        variants.append(add_or_replace_params(url, p))
+
+    if "serviceKey=" in url:
+        variants.append(url)
+
+    seen, out = set(), []
+    for v in variants:
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+def json_to_df(obj):
+    if obj is None:
+        return pd.DataFrame()
+    candidates = []
+    if isinstance(obj, dict):
+        paths = [
+            ["response","body","items","item"],
+            ["response","body","item"],
+            ["body","items","item"],
+            ["items","item"],
+            ["data"],
+            ["result"],
+        ]
+        for path in paths:
+            cur = obj
+            ok = True
+            for p in path:
+                if isinstance(cur, dict) and p in cur:
+                    cur = cur[p]
+                else:
+                    ok = False
+                    break
+            if ok:
+                candidates = cur
+                break
+        if candidates == []:
+            def walk(x):
+                if isinstance(x, list) and (not x or isinstance(x[0], dict)):
+                    return x
+                if isinstance(x, dict):
+                    for v in x.values():
+                        got = walk(v)
+                        if got is not None:
+                            return got
+                return None
+            got = walk(obj)
+            candidates = got if got is not None else obj
+    else:
+        candidates = obj
+
+    if isinstance(candidates, dict):
+        candidates = [candidates]
+    if not isinstance(candidates, list):
+        return pd.DataFrame()
     try:
-        (DATA_DIR / "api_settings_backup.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return pd.json_normalize(candidates)
+    except Exception:
+        return pd.DataFrame(candidates)
+
+def xml_to_df(txt):
+    try:
+        root = ET.fromstring(txt)
+        rows = []
+        for item in root.findall(".//item"):
+            rows.append({c.tag: c.text for c in item})
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame()
+
+def fetch_one_api(key, rc_date, meet, race_no):
+    url = get_url(key)
+    if not url:
+        return pd.DataFrame(), "URL 없음", ""
+    if not API_KEY and "serviceKey=" not in url:
+        return pd.DataFrame(), "API_KEY 없음: Secrets 필요", ""
+
+    last_msg = ""
+    last_url = ""
+    for req_url in request_variants(url, rc_date, meet, race_no):
+        last_url = req_url
+        try:
+            r = requests.get(req_url, timeout=15)
+            if r.status_code != 200:
+                last_msg = f"HTTP {r.status_code}"
+                continue
+            txt = r.text.strip()
+            if "SERVICE_KEY_IS_NOT_REGISTERED" in txt or "INVALID_REQUEST_PARAMETER" in txt or "SERVICE_ACCESS_DENIED" in txt:
+                last_msg = txt[:160]
+                continue
+            ctype = r.headers.get("content-type","").lower()
+            if txt.startswith("{") or txt.startswith("[") or "json" in ctype:
+                try:
+                    df = json_to_df(r.json())
+                except Exception:
+                    df = pd.DataFrame()
+            else:
+                df = xml_to_df(txt)
+            if not df.empty:
+                return df, "OK", req_url
+            last_msg = "응답 200 / 데이터 0건"
+        except Exception as e:
+            last_msg = str(e)[:180]
+    return pd.DataFrame(), last_msg, last_url
+
+def normalize_meet(x):
+    s = str(x or "").strip()
+    if s in ["1","서울","SEOUL","Seoul","seoul"]:
+        return "서울"
+    if s in ["2","제주","JEJU","Jeju","jeju"]:
+        return "제주"
+    if s in ["3","부산경남","부경","부산","BUSAN","Busan","busan"]:
+        return "부산경남"
+    return s
+
+def find_col(df, names):
+    if df is None or df.empty:
+        return None
+    lower = {str(c).lower(): c for c in df.columns}
+    for n in names:
+        if str(n).lower() in lower:
+            return lower[str(n).lower()]
+    for c in df.columns:
+        cl = str(c).lower()
+        for n in names:
+            if str(n).lower() in cl:
+                return c
+    return None
+
+def horse_no_col(df):
+    return find_col(df, ["chulNo", "출전번호", "출전마번", "마번", "horseNo", "hrNo"])
+
+def horse_name_col(df):
+    return find_col(df, ["hrName", "horseName", "마명", "경주마명"])
+
+def num_series(s, default=0):
+    return pd.to_numeric(s, errors="coerce").fillna(default)
+
+def current_filter(df, rc_date, meet, race_no):
+    if df is None or df.empty:
+        return df
+    d = df.copy()
+    original = d.copy()
+
+    date_col = find_col(d, ["rcDate","raceDate","meetDate","날짜","경주일자"])
+    meet_col = find_col(d, ["meet","meetCd","rcourse","경마장"])
+    rc_col = find_col(d, ["rcNo","raceNo","경주번호"])
+
+    try:
+        if date_col:
+            ds = d[date_col].astype(str).str.replace("-","",regex=False).str.strip()
+            tmp = d[ds == rc_date]
+            if not tmp.empty:
+                d = tmp
     except Exception:
         pass
+    try:
+        if meet_col:
+            tmp = d[d[meet_col].apply(normalize_meet) == normalize_meet(meet)]
+            if not tmp.empty:
+                d = tmp
+    except Exception:
+        pass
+    try:
+        if rc_col:
+            rs = pd.to_numeric(d[rc_col], errors="coerce")
+            tmp = d[rs == int(race_no)]
+            if not tmp.empty:
+                d = tmp
+    except Exception:
+        pass
+    return d if not d.empty else original
 
+def sample_data():
+    return pd.DataFrame([
+        {"마번":5,"마명":"마루스피드","레이팅":78,"최근순위":2,"승률":18,"복승률":42,"예상배당":9.2,"체중변화":-2,"기수점수":75,"인기":4},
+        {"마번":11,"마명":"그린파워","레이팅":75,"최근순위":3,"승률":15,"복승률":38,"예상배당":7.8,"체중변화":-1,"기수점수":72,"인기":5},
+        {"마번":2,"마명":"블루런","레이팅":72,"최근순위":4,"승률":12,"복승률":35,"예상배당":12.5,"체중변화":0,"기수점수":69,"인기":7},
+        {"마번":7,"마명":"라스트킹","레이팅":70,"최근순위":5,"승률":10,"복승률":30,"예상배당":15.4,"체중변화":2,"기수점수":67,"인기":8},
+        {"마번":3,"마명":"해피로드","레이팅":66,"최근순위":6,"승률":8,"복승률":25,"예상배당":22.0,"체중변화":-4,"기수점수":65,"인기":9},
+    ])
+
+def build_base_horses(data, rc_date, meet, race_no):
+    priority = ["entry_url", "body_url", "gear_url", "today_odds_url", "odds_url", "rating_url", "horse_url"]
+    rows = {}
+    for key in priority:
+        df = current_filter(data.get(key, pd.DataFrame()), rc_date, meet, race_no)
+        if df is None or df.empty:
+            continue
+        no_col = horse_no_col(df)
+        if not no_col:
+            continue
+        name_col = horse_name_col(df)
+        for _, r in df.iterrows():
+            try:
+                n = int(float(r.get(no_col)))
+            except Exception:
+                continue
+            if not 1 <= n <= 20:
+                continue
+            if n not in rows:
+                rows[n] = {"마번": n, "마명": f"{n}번", "근거API": []}
+            if name_col and str(r.get(name_col, "")).strip():
+                rows[n]["마명"] = str(r.get(name_col)).strip()
+            rows[n]["근거API"].append(key.replace("_url",""))
+    if not rows:
+        return sample_data()
+    return pd.DataFrame(list(rows.values())).sort_values("마번")
+
+def merge_score_features(base, data, rc_date, meet, race_no):
+    h = base.copy()
+    h["레이팅"] = 60
+    h["최근순위"] = 5
+    h["승률"] = 8
+    h["복승률"] = 25
+    h["예상배당"] = 12.0
+    h["체중변화"] = 0
+    h["기수점수"] = 65
+    h["인기"] = 7
+
+    def map_by_no(key, target_col, candidate_cols):
+        df = current_filter(data.get(key, pd.DataFrame()), rc_date, meet, race_no)
+        if df is None or df.empty:
+            return
+        no_col = horse_no_col(df)
+        val_col = find_col(df, candidate_cols)
+        if not no_col or not val_col:
+            return
+        tmp = df[[no_col, val_col]].copy()
+        tmp[no_col] = pd.to_numeric(tmp[no_col], errors="coerce")
+        tmp = tmp.dropna(subset=[no_col])
+        mp = dict(zip(tmp[no_col].astype(int), tmp[val_col]))
+        h[target_col] = h["마번"].map(mp).fillna(h[target_col])
+
+    map_by_no("rating_url", "레이팅", ["rating","레이팅","rt","ratingValue"])
+    map_by_no("race_record_url", "최근순위", ["ord","rank","chaksun","최근순위","순위"])
+    map_by_no("odds_url", "예상배당", ["odds","배당","winOdds","dividend","배당률"])
+    map_by_no("today_odds_url", "예상배당", ["odds","배당","winOdds","dividend","배당률"])
+    map_by_no("body_url", "체중변화", ["wgBudam","weightDiff","체중변화","증감","diff"])
+    map_by_no("popularity_url", "인기", ["popRank","popularity","인기","인기순위"])
+    map_by_no("jockey_change_url", "기수점수", ["jockeyScore","기수점수"])
+
+    med = sample_data()
+    for c in ["레이팅","최근순위","승률","복승률","예상배당","체중변화","기수점수","인기"]:
+        fallback = med[c].median() if c in med else 0
+        h[c] = pd.to_numeric(h[c], errors="coerce").fillna(fallback)
+    return h
+
+def fetch_weather(meet):
+    coords = {"서울":(37.4438,127.0165), "부산경남":(35.1545,128.8782), "제주":(33.4097,126.3934)}
+    lat, lon = coords.get(meet, coords["서울"])
+    env = {"날씨":"기본", "강수":0.0, "바람":0.0, "주로":"양호", "모래":"보통"}
+    try:
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,precipitation,weather_code,wind_speed_10m&timezone=Asia%2FSeoul"
+        cur = requests.get(url, timeout=8).json().get("current", {})
+        precip = float(cur.get("precipitation", 0) or 0)
+        wind = float(cur.get("wind_speed_10m", 0) or 0)
+        code = int(cur.get("weather_code", 0) or 0)
+        weather = "비" if precip >= 0.3 or code in [51,53,55,61,63,65,80,81,82,95,96,99] else ("흐림" if code in [1,2,3,45,48] else "맑음")
+        track = "포화" if precip >= 3 else ("다습" if precip >= 0.3 else "양호")
+        sand = "무거움" if precip >= 1 else "보통"
+        env = {"날씨":weather, "강수":precip, "바람":wind, "주로":track, "모래":sand}
+    except Exception:
+        pass
+    return env
+
+def score_and_recommend(h, env, sim_count=1000, risk_mode="균형형"):
+    x = h.copy()
+    recent_score = (10 - num_series(x["최근순위"], 5).clip(1,10)) * 4.0
+    rating_score = (num_series(x["레이팅"], 60).clip(40,100) - 40) * 0.85
+    win_score = num_series(x["승률"], 8).clip(0,50) * 0.9
+    place_score = num_series(x["복승률"], 25).clip(0,80) * 0.45
+    odds = num_series(x["예상배당"], 12).clip(1,100)
+    value_score = odds.apply(lambda v: 18 if 6 <= v <= 25 else (11 if 25 < v <= 45 else 4))
+    weight_delta = num_series(x["체중변화"], 0)
+    weight_score = weight_delta.apply(lambda v: 7 if -3 <= v <= -1 else (2 if v == 0 else (-8 if abs(v) >= 5 else -2)))
+    jockey_score = num_series(x["기수점수"], 65) * 0.25
+    pop_score = (10 - num_series(x["인기"], 7).clip(1,10)) * 1.2
+    env_bonus = 2 if env.get("주로") == "양호" else -1
+
+    x["점수"] = recent_score + rating_score + win_score + place_score + value_score + weight_score + jockey_score + pop_score + env_bonus
+    x = x.sort_values("점수", ascending=False).reset_index(drop=True)
+
+    nums = x["마번"].astype(int).tolist()
+    scores = x["점수"].astype(float).tolist()
+    volatility = 5.5 + (1.5 if env.get("주로") in ["다습","포화"] else 0)
+    if risk_mode == "안전형":
+        volatility *= 0.88
+    elif risk_mode == "공격형":
+        volatility *= 1.15
+
+    random.seed(42)
+    counts = {}
+    for _ in range(int(sim_count)):
+        noisy = [(n, s + random.gauss(0, volatility)) for n, s in zip(nums, scores)]
+        top3 = tuple(str(n) for n, _ in sorted(noisy, key=lambda a:a[1], reverse=True)[:3])
+        counts[top3] = counts.get(top3, 0) + 1
+    combos = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    if combos:
+        top_combo = combos[0][0]
+        combo_txt = " - ".join(top_combo)
+        confidence = min(94, max(35, int(combos[0][1] / int(sim_count) * 100 + 50)))
+    else:
+        combo_txt = "-"
+        confidence = 0
+
+    defense = "-"
+    if len(x) >= 4:
+        defense = f"{int(x.iloc[0]['마번'])} - {int(x.iloc[1]['마번'])} - {int(x.iloc[3]['마번'])}"
+
+    avg_odds = float(num_series(x.head(3)["예상배당"], 10).mean()) if len(x) else 0
+    decision = "소액 공격" if confidence >= 75 else ("소액 가능" if confidence >= 62 else "관망")
+    amount = 1000 if decision != "관망" else 0
+
+    result = {
+        "판정": decision,
+        "공격삼쌍승": combo_txt,
+        "방어삼복승": defense,
+        "예상배당": round(avg_odds, 1),
+        "신뢰도": confidence,
+        "추천금액": amount,
+        "근거": " · ".join([f"{int(r['마번'])}번 {r.get('마명','')} 점수상위" for _, r in x.head(3).iterrows()]),
+    }
+    combo_rows = [{"조합":" - ".join(k), "반복횟수":v, "비율":round(v/int(sim_count)*100,1)} for k,v in combos]
+    return x, result, combo_rows
+
+def load_local_hub():
+    if LOCAL_HUB_FILE.exists():
+        try:
+            return pd.read_csv(LOCAL_HUB_FILE)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+def append_local_hub(row):
+    old = load_local_hub()
+    new = pd.concat([old, pd.DataFrame([row])], ignore_index=True)
+    new.to_csv(LOCAL_HUB_FILE, index=False, encoding="utf-8-sig")
+    return len(new)
 
 def sheets_secret_get(names, default=""):
     try:
@@ -406,1780 +516,262 @@ def sheets_secret_get(names, default=""):
         pass
     return default
 
-def sheets_enabled():
-    return bool(sheets_secret_get(["SHEET_ID", "sheet_id"], ""))
-
 def get_gsheet_client():
-    """
-    Streamlit Secrets의 [google_sheets] 서비스계정 JSON으로 Google Sheets 연결.
-    없거나 실패하면 None 반환하고 앱은 로컬 CSV로 계속 작동.
-    """
-    if not sheets_enabled():
-        return None, "Google Sheets 미설정"
-
+    sheet_id = sheets_secret_get(["SHEET_ID","sheet_id"], "")
+    if not sheet_id:
+        return None, "SHEET_ID 없음"
     try:
         import gspread
         from google.oauth2.service_account import Credentials
-
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-
-        # 방법 1: SERVICE_ACCOUNT_JSON 전체를 TOML multiline string으로 저장
-        raw = sheets_secret_get(["SERVICE_ACCOUNT_JSON", "service_account_json"], "")
+        raw = sheets_secret_get(["SERVICE_ACCOUNT_JSON","service_account_json"], "")
+        info = None
         if raw:
-            if isinstance(raw, str):
-                info = json.loads(raw)
-            else:
-                info = dict(raw)
-        else:
-            # 방법 2: [google_sheets.service_account] 형태의 TOML table
-            info = {}
-            try:
-                if "google_sheets" in st.secrets and "service_account" in st.secrets["google_sheets"]:
-                    info = dict(st.secrets["google_sheets"]["service_account"])
-            except Exception:
-                info = {}
-
+            info = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        elif "google_sheets" in st.secrets and "service_account" in st.secrets["google_sheets"]:
+            info = dict(st.secrets["google_sheets"]["service_account"])
         if not info:
-            return None, "서비스계정 정보 없음"
-
+            return None, "서비스계정 JSON 없음"
+        scopes = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(info, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client, ""
+        return gspread.authorize(creds), ""
     except Exception as e:
-        return None, "Google Sheets 연결 실패: " + str(e)
+        return None, str(e)[:120]
 
-def get_sheet_workbook():
-    client, err = get_gsheet_client()
+def hub_append_sheet(sheet_name, row):
+    sheet_id = sheets_secret_get(["SHEET_ID","sheet_id"], "")
+    client, msg = get_gsheet_client()
     if client is None:
-        return None, err
+        return False, msg
     try:
-        sheet_id = str(sheets_secret_get(["SHEET_ID", "sheet_id"], "")).strip()
-        if not sheet_id:
-            return None, "SHEET_ID 없음"
-        return client.open_by_key(sheet_id), ""
-    except Exception as e:
-        return None, "시트 열기 실패: " + str(e)
-
-def get_or_create_ws(wb, title, headers):
-    try:
-        ws = wb.worksheet(title)
-    except Exception:
-        ws = wb.add_worksheet(title=title, rows=1000, cols=max(20, len(headers) + 5))
-        ws.append_row(headers)
-        return ws
-
-    try:
-        first = ws.row_values(1)
-        if not first:
+        sh = client.open_by_key(str(sheet_id))
+        try:
+            ws = sh.worksheet(sheet_name)
+        except Exception:
+            ws = sh.add_worksheet(title=sheet_name, rows=1000, cols=30)
+        existing = ws.get_all_values()
+        headers = list(row.keys())
+        if not existing:
             ws.append_row(headers)
-    except Exception:
-        pass
-    return ws
-
-def df_from_worksheet(title, headers):
-    wb, err = get_sheet_workbook()
-    if wb is None:
-        return pd.DataFrame(), err
-    try:
-        ws = get_or_create_ws(wb, title, headers)
-        records = ws.get_all_records()
-        return pd.DataFrame(records), ""
+        else:
+            headers = existing[0]
+            missing = [k for k in row.keys() if k not in headers]
+            if missing:
+                headers = headers + missing
+                ws.update("1:1", [headers])
+        ws.append_row([row.get(h, "") for h in headers], value_input_option="USER_ENTERED")
+        return True, "Google Sheet 허브 저장 성공"
     except Exception as e:
-        return pd.DataFrame(), "시트 읽기 실패: " + str(e)
+        return False, str(e)[:120]
 
-def append_sheet_row(title, row, headers):
-    wb, err = get_sheet_workbook()
-    if wb is None:
-        return False, err
+def hub_read_sheet(sheet_name, limit=100):
+    client, msg = get_gsheet_client()
+    if client is None:
+        return pd.DataFrame()
     try:
-        ws = get_or_create_ws(wb, title, headers)
-        all_headers = ws.row_values(1)
-        if not all_headers:
-            all_headers = headers
-            ws.append_row(all_headers)
-
-        # 새 컬럼이 생기면 헤더 확장
-        changed = False
-        for k in row.keys():
-            if k not in all_headers:
-                all_headers.append(k)
-                changed = True
-        if changed:
-            ws.update("1:1", [all_headers])
-
-        values = [row.get(h, "") for h in all_headers]
-        ws.append_row(values, value_input_option="USER_ENTERED")
-        return True, ""
-    except Exception as e:
-        return False, "시트 저장 실패: " + str(e)
-
-def file_to_sheet_title(path):
-    name = str(path)
-    if "recommendation" in name:
-        return "recommendations"
-    if "compare" in name:
-        return "comparisons"
-    if "result" in name:
-        return "results"
-    return "logs"
-
-def default_headers_for_path(path):
-    title = file_to_sheet_title(path)
-    if title == "recommendations":
-        return ["저장시각","날짜","경마장","경주번호","출발시간","판정","공격삼쌍승","방어삼복승","보조삼쌍승","예상배당","신뢰도","추천금액","오늘손익","누적손익","날씨","주로","모래","바람"]
-    if title == "comparisons":
-        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","실제삼쌍","실제삼복","투입금","환급금","수익률","분석결과","메모"]
-    if title == "results":
-        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","투입금","환급금","수익률","분석결과","메모"]
-    return ["저장시각","내용"]
-
-
-def read_table(path):
-    # Google Sheets가 설정되어 있으면 PC/모바일 공용 기록을 우선 읽음
-    try:
-        if sheets_enabled():
-            title = file_to_sheet_title(path)
-            headers = default_headers_for_path(path)
-            df, err = df_from_worksheet(title, headers)
-            if not df.empty:
-                return df
+        sheet_id = sheets_secret_get(["SHEET_ID","sheet_id"], "")
+        sh = client.open_by_key(str(sheet_id))
+        ws = sh.worksheet(sheet_name)
+        vals = ws.get_all_records()
+        return pd.DataFrame(vals).tail(limit)
     except Exception:
-        pass
+        return pd.DataFrame()
 
-    if path.exists():
-        try:
-            return pd.read_csv(path)
-        except Exception:
-            return pd.DataFrame()
-    return pd.DataFrame()
-
-
-def append_table(path, row):
-    # 1) Google Sheets 저장: PC/모바일 공용
-    try:
-        if sheets_enabled():
-            title = file_to_sheet_title(path)
-            headers = default_headers_for_path(path)
-            ok, err = append_sheet_row(title, row, headers)
-            if not ok:
-                st.warning("Google Sheets 저장 실패: " + str(err))
-    except Exception as e:
-        try:
-            st.warning("Google Sheets 저장 중 오류: " + str(e))
-        except Exception:
-            pass
-
-    # 2) 로컬 CSV도 백업 저장
-    df = pd.DataFrame()
-    if path.exists():
-        try:
-            df = pd.read_csv(path)
-        except Exception:
-            df = pd.DataFrame()
-    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    df.to_csv(path, index=False, encoding="utf-8-sig")
-    return df
-
-
-def today():
-    return today_kst()
-
-
-
-def current_setting_payload():
-    payload = {}
-    try:
-        if isinstance(settings, dict):
-            payload.update(settings)
-    except Exception:
-        pass
-    try:
-        payload.update(_force_payload)
-    except Exception:
-        pass
-    return payload
-
-def resolve_api_url(var_name, secret_keys=None, default=""):
-    """
-    API URL 변수가 누락되어도 앱이 멈추지 않게 Secrets/settings/session_state에서 안전하게 찾습니다.
-    """
-    secret_keys = secret_keys or []
-    try:
-        val = globals().get(var_name, "")
-        if val:
-            return val
-    except Exception:
-        pass
-
-    try:
-        if "settings" in globals() and isinstance(settings, dict):
-            for k in [var_name] + secret_keys:
-                if settings.get(k):
-                    return settings.get(k)
-    except Exception:
-        pass
-
-    try:
-        if "maru" in st.secrets:
-            for k in secret_keys:
-                if k in st.secrets["maru"]:
-                    return st.secrets["maru"][k]
-    except Exception:
-        pass
-
-    try:
-        for k in secret_keys:
-            if k in st.secrets:
-                return st.secrets[k]
-    except Exception:
-        pass
-
-    try:
-        for k in [var_name] + secret_keys:
-            if k in st.session_state:
-                return st.session_state[k]
-    except Exception:
-        pass
-
-    return default
-
-def build_api_url(url):
-    """
-    안전형 자동완성:
-    기본 주소만 넣으면 serviceKey/pageNo/numOfRows/resultType까지만 붙입니다.
-    rcDate, meet 같은 API별 변수는 자동으로 붙이지 않습니다.
-    이유: API마다 필수 변수 이름이 달라서 잘못 붙이면 HTTP 500이 늘어납니다.
-    """
-    url = str(url or "").strip()
-    if not url:
-        return ""
-
-    key = str(api_key or "").strip()
-    ymd = today_kst()
-
-    url = url.replace("{serviceKey}", key)
-    url = url.replace("{today}", ymd)
-    url = url.replace("{ymd}", ymd)
-
-    sep = "&" if "?" in url else "?"
-    extras = []
-    low = url.lower()
-
-    if "servicekey=" not in low and key:
-        extras.append("serviceKey=" + key)
-    if "pageno=" not in low:
-        extras.append("pageNo=1")
-    if "numofrows=" not in low:
-        extras.append("numOfRows=100")
-    if "resulttype=" not in low and "_type=" not in low and "type=" not in low:
-        extras.append("resultType=json")
-
-    if extras:
-        url = url + sep + "&".join(extras)
-
-    return url
-
-def json_to_df(obj):
-    if isinstance(obj, dict):
-        for path in [["response","body","items","item"], ["response","body","item"], ["items","item"], ["data"], ["result"], ["body","items","item"]]:
-            cur = obj
-            ok = True
-            for p in path:
-                if isinstance(cur, dict) and p in cur:
-                    cur = cur[p]
-                else:
-                    ok = False
-                    break
-            if ok:
-                obj = cur
-                break
-    if isinstance(obj, dict):
-        obj = [obj]
-    return make_unique_columns(pd.json_normalize(obj))
-
-def xml_to_df(text):
-    root = ET.fromstring(text)
-    rows = []
-    for item in root.findall(".//item"):
-        rows.append({c.tag: c.text for c in item})
-    return make_unique_columns(pd.DataFrame(rows))
-
-def fetch_api(url):
-    if not str(url).strip():
-        return pd.DataFrame(), ""
-    if not api_key.strip() and "serviceKey=" not in str(url):
-        return pd.DataFrame(), "API Key 미입력"
-    try:
-        req_url = build_api_url(url)
-        res = requests.get(req_url, timeout=15)
-        if res.status_code != 200:
-            return pd.DataFrame(), f"HTTP {res.status_code}"
-        txt = res.text.strip()
-        if txt.startswith("{") or txt.startswith("[") or "json" in res.headers.get("content-type", ""):
-            return json_to_df(res.json()), ""
-        return xml_to_df(txt), ""
-    except Exception as e:
-        return pd.DataFrame(), str(e)
-
-
-# 환경/날씨 변수 기본값 보강
-auto_weather = globals().get("auto_weather", True)
-manual_weather = globals().get("manual_weather", "흐림")
-manual_track = globals().get("manual_track", "양호")
-manual_sand = globals().get("manual_sand", "보통")
-manual_wind = globals().get("manual_wind", "보통")
-
-
-# 환경 변수 별칭 보강
-weather = globals().get("weather", manual_weather)
-track = globals().get("track", manual_track)
-sand = globals().get("sand", manual_sand)
-wind = globals().get("wind", manual_wind)
-
-def fetch_env():
-    auto_weather = bool(globals().get("auto_weather", True))
-    try:
-        if "auto_weather" in st.session_state:
-            auto_weather = bool(st.session_state["auto_weather"])
-    except Exception:
-        pass
-    manual_weather = globals().get("manual_weather", st.session_state.get("manual_weather", "흐림") if "manual_weather" in st.session_state else "흐림")
-    manual_track = globals().get("manual_track", st.session_state.get("manual_track", "양호") if "manual_track" in st.session_state else "양호")
-    manual_sand = globals().get("manual_sand", st.session_state.get("manual_sand", "보통") if "manual_sand" in st.session_state else "보통")
-    manual_wind = globals().get("manual_wind", st.session_state.get("manual_wind", "보통") if "manual_wind" in st.session_state else "보통")
-
-    env = {"weather":"맑음", "track":"양호", "sand":"보통", "wind":"없음", "source":"기본", "precip":0, "wind_speed":0}
-    if auto_weather:
-        coords = {"서울":(37.4438,127.0165), "부산경남":(35.1545,128.8782), "제주":(33.4097,126.3934)}
-        lat, lon = coords[track_place]
-        try:
-            url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,precipitation,weather_code,wind_speed_10m&timezone=Asia%2FSeoul"
-            cur = requests.get(url, timeout=8).json().get("current", {})
-            precip = float(cur.get("precipitation", 0) or 0)
-            wind_speed = float(cur.get("wind_speed_10m", 0) or 0)
-            code = int(cur.get("weather_code", 0) or 0)
-            weather = "비" if precip >= 0.3 or code in [51,53,55,61,63,65,80,81,82,95,96,99] else ("흐림" if code in [1,2,3,45,48] else "맑음")
-            if code in [71,73,75,77,85,86]:
-                weather = "눈"
-            wind = "없음" if wind_speed < 2 else ("측풍" if wind_speed < 5 else "맞바람")
-            if weather in ["비","눈"] and precip >= 3:
-                track, sand = "포화", "무거움"
-            elif weather in ["비","눈"] and precip >= 1:
-                track, sand = "다습", "무거움"
-            elif weather in ["비","눈"]:
-                track, sand = "다습", "보통"
-            else:
-                track, sand = "양호", "보통"
-            env = {"weather":weather, "track":track, "sand":sand, "wind":wind, "source":"자동수집", "precip":precip, "wind_speed":wind_speed}
-        except Exception:
-            env["source"] = "자동실패"
-
-    if manual_weather != "자동": env["weather"] = manual_weather
-    if manual_track != "자동": env["track"] = manual_track
-    if manual_sand != "자동": env["sand"] = manual_sand
-    if manual_wind != "자동": env["wind"] = manual_wind
-    return env
-
-def sample_data():
-    race = pd.DataFrame([{"경마장":track_place, "경주번호":"6", "출발시간":"16:05"}])
-    horse = pd.DataFrame([
-        {"마번":5,"마명":"마루스피드","최근순위":2,"승률":18,"복승률":42,"부담중량":55,"예상배당":9.2,"레이팅":78,"레이팅변화":4,"선행력":82,"추입력":70,"파워":78,"순발력":84,"습주로":72,"모래적응":80},
-        {"마번":11,"마명":"그린파워","최근순위":3,"승률":15,"복승률":38,"부담중량":54.5,"예상배당":7.8,"레이팅":75,"레이팅변화":2,"선행력":75,"추입력":78,"파워":82,"순발력":77,"습주로":80,"모래적응":83},
-        {"마번":2,"마명":"블루런","최근순위":4,"승률":12,"복승률":35,"부담중량":53,"예상배당":12.5,"레이팅":72,"레이팅변화":3,"선행력":70,"추입력":83,"파워":76,"순발력":79,"습주로":84,"모래적응":75},
-        {"마번":7,"마명":"라스트킹","최근순위":5,"승률":10,"복승률":30,"부담중량":55.5,"예상배당":15.4,"레이팅":70,"레이팅변화":-1,"선행력":68,"추입력":72,"파워":85,"순발력":69,"습주로":86,"모래적응":88},
-        {"마번":3,"마명":"해피로드","최근순위":6,"승률":8,"복승률":25,"부담중량":56,"예상배당":22,"레이팅":66,"레이팅변화":1,"선행력":65,"추입력":74,"파워":70,"순발력":73,"습주로":68,"모래적응":71}
-    ])
-    risk = pd.DataFrame([
-        {"마번":5,"출발위험":0,"주행위험":1},
-        {"마번":11,"출발위험":1,"주행위험":0},
-        {"마번":2,"출발위험":0,"주행위험":0},
-        {"마번":7,"출발위험":1,"주행위험":1},
-        {"마번":3,"출발위험":2,"주행위험":1}
-    ])
-    return race, horse, risk
-
-
-def normalize_meet_value(x):
-    s = str(x or "").strip()
-    if s in ["1", "서울", "SEOUL", "Seoul"]:
-        return "서울"
-    if s in ["2", "제주", "JEJU", "Jeju"]:
-        return "제주"
-    if s in ["3", "부산경남", "부경", "BUSAN", "Busan", "부산"]:
-        return "부산경남"
-    return s
-
-def find_col_by_names(df, names):
-    if df is None or df.empty:
-        return None
-    lower = {str(c).lower(): c for c in df.columns}
-    for n in names:
-        if n.lower() in lower:
-            return lower[n.lower()]
-    for c in df.columns:
-        cl = str(c).lower()
-        for n in names:
-            if n.lower() in cl:
-                return c
-    return None
-
-def soft_filter_one_api(df, key="api"):
-    """
-    선택 경주 필터는 기본적으로 부드럽게 적용합니다.
-    엄격 필터를 켠 경우에만 rcDate/meet/rcNo가 정확히 맞는 행만 남깁니다.
-    단, 필터 후 데이터가 완전히 비면 원본을 유지합니다.
-    """
-    if df is None or df.empty:
-        return df
-
-    try:
-        strict = bool(strict_race_filter)
-    except Exception:
-        strict = False
-
-    if not strict:
-        return df
-
-    d = df.copy()
-    original = d.copy()
-
-    desired_date = str(target_date or today_kst()).replace("-", "").strip()
-    desired_meet = normalize_meet_value(track_place)
-    desired_rc = int(target_rc_no)
-
-    date_col = find_col_by_names(d, ["rcDate", "raceDate", "meetDate", "date", "ymd"])
-    meet_col = find_col_by_names(d, ["meet", "meetCd", "rcourse", "경마장"])
-    rc_col = find_col_by_names(d, ["rcNo", "raceNo", "경주번호"])
-
-    try:
-        if date_col:
-            ds = d[date_col].astype(str).str.replace("-", "", regex=False).str.strip()
-            d = d[ds == desired_date]
-    except Exception:
-        pass
-
-    try:
-        if meet_col:
-            ms = d[meet_col].apply(normalize_meet_value)
-            d = d[ms == desired_meet]
-    except Exception:
-        pass
-
-    try:
-        if rc_col:
-            rs = pd.to_numeric(d[rc_col], errors="coerce")
-            d = d[rs == desired_rc]
-    except Exception:
-        pass
-
-    # 너무 많이 걸러져 비면 원본 유지
-    if d.empty:
-        return original
-    return d
-
-
-def _safe_str(x):
-    return str(x or "").strip()
-
-def _num_series(s):
-    return pd.to_numeric(s, errors="coerce")
-
-def current_target_values():
-    try:
-        d = str(target_date).replace("-", "").strip()
-    except Exception:
-        d = today()
-    try:
-        rc = int(target_rc_no)
-    except Exception:
-        rc = None
-    try:
-        meet = track_place
-    except Exception:
-        meet = ""
-    return d, meet, rc
-
-def normalize_meet_for_filter(x):
-    s = str(x or "").strip()
-    if s in ["1", "서울", "SEOUL", "Seoul", "seoul"]:
-        return "서울"
-    if s in ["2", "제주", "JEJU", "Jeju", "jeju"]:
-        return "제주"
-    if s in ["3", "부산경남", "부경", "부산", "BUSAN", "Busan", "busan"]:
-        return "부산경남"
-    return s
-
-def find_any_col(df, names):
-    if df is None or df.empty:
-        return None
-    lower = {str(c).lower(): c for c in df.columns}
-    for n in names:
-        if str(n).lower() in lower:
-            return lower[str(n).lower()]
-    for c in df.columns:
-        cl = str(c).lower()
-        for n in names:
-            if str(n).lower() in cl:
-                return c
-    return None
-
-def smart_current_filter(df, api_name=""):
-    """
-    현재 선택 경주만 우선 사용합니다.
-    rcDate / meet / rcNo 컬럼이 있으면 자동 필터.
-    필터 후 1행 이상이면 필터된 데이터 사용.
-    완전히 비면 원본 유지하되 추천 단계에서는 관망 처리.
-    """
-    if df is None or df.empty:
-        return df
-
-    d = df.copy()
-    original = d.copy()
-    target_date_s, target_meet, target_rc = current_target_values()
-
-    date_col = find_any_col(d, ["rcDate", "raceDate", "meetDate", "date", "ymd"])
-    meet_col = find_any_col(d, ["meet", "meetCd", "rcourse", "경마장"])
-    rc_col = find_any_col(d, ["rcNo", "raceNo", "경주번호"])
-
-    try:
-        if date_col:
-            ds = d[date_col].astype(str).str.replace("-", "", regex=False).str.strip()
-            d = d[ds == target_date_s]
-    except Exception:
-        pass
-
-    try:
-        if meet_col:
-            ms = d[meet_col].apply(normalize_meet_for_filter)
-            d = d[ms == normalize_meet_for_filter(target_meet)]
-    except Exception:
-        pass
-
-    try:
-        if rc_col and target_rc is not None:
-            rs = pd.to_numeric(d[rc_col], errors="coerce")
-            d = d[rs == target_rc]
-    except Exception:
-        pass
-
-    if not d.empty:
-        return d
-
-    return original
-
-def has_current_chulno_source(data):
-    """
-    현재 경주 기준 chulNo 소스가 있는지 확인.
-    body/gear/today_odds 중 현재 경주 필터 후 chulNo가 3개 이상이면 True.
-    """
-    trusted = ["body", "gear", "today_odds"]
-    for key in trusted:
-        df = data.get(key, pd.DataFrame())
-        if df is None or df.empty:
-            continue
-        f = smart_current_filter(df, key)
-        col = horse_no_col(f)
-        if col:
-            vals = pd.to_numeric(f[col], errors="coerce")
-            if vals.between(1, 14, inclusive="both").sum() >= 3:
-                return True
-    return False
-
-def clean_result_for_display(result, data):
-    """
-    관망/무효 상태에서는 조합을 화면에서 숨깁니다.
-    """
-    if not result:
-        return result
-    try:
-        combo = str(result.get("공격삼쌍승", "")).replace("/", "-").strip()
-        nums = [int(x.strip()) for x in combo.split("-") if x.strip()]
-        invalid_combo = len(nums) != 3 or any(n < 1 or n > 14 for n in nums)
-    except Exception:
-        invalid_combo = True
-
-    if invalid_combo or not has_current_chulno_source(data):
-        result["판정"] = "관망"
-        result["추천금액"] = 0
-        result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
-        result["자금상태"] = "현재 경주 chulNo 부족 / 데이터 섞임 방지"
-        result["공격삼쌍승"] = "-"
-        result["방어삼복승"] = "-"
-        result["보조삼쌍승"] = "-"
-        result["예상배당"] = 0
-    return result
-
-
-# 전역 API URL 기본값 보강
-race_url = globals().get("race_url", "")
-entry_url = globals().get("entry_url", "")
-horse_url = globals().get("horse_url", "")
-body_url = globals().get("body_url", "")
-gear_url = globals().get("gear_url", "")
-rating_url = globals().get("rating_url", "")
-odds_url = globals().get("odds_url", "")
-today_odds_url = globals().get("today_odds_url", "")
-result_detail_url = globals().get("result_detail_url", "")
-race_record_url = globals().get("race_record_url", "")
-start_exam_url = globals().get("start_exam_url", "")
-judge_url = globals().get("judge_url", "")
-jockey_change_url = globals().get("jockey_change_url", "")
-weather_alert_url = globals().get("weather_alert_url", "")
-corner_pace_url = globals().get("corner_pace_url", "")
-popularity_url = globals().get("popularity_url", "")
-first_odds_url = globals().get("first_odds_url", "")
-second_odds_url = globals().get("second_odds_url", "")
-third_odds_url = globals().get("third_odds_url", "")
-
-
-# 샘플데이터 사용 여부 기본값 보강
-use_sample = globals().get("use_sample", False)
-
-
-FORCE_API_KEYS = [
-    ("race_url", "1. 경주정보 URL"),
-    ("entry_url", "2. 출전등록말 URL"),
-    ("horse_url", "3. 경주마정보 URL"),
-    ("body_url", "4. 출전마 체중 URL"),
-    ("gear_url", "5. 장구/폐출혈 URL"),
-    ("rating_url", "6. 레이팅 URL"),
-    ("odds_url", "7. 배당/매출 URL"),
-    ("today_odds_url", "8. 시행당일 배당 URL"),
-    ("result_detail_url", "9. AI 경주결과상세 URL"),
-    ("race_record_url", "10. 경주기록 URL"),
-    ("start_exam_url", "11. 출발심사 URL"),
-    ("judge_url", "12. 경주심판 URL"),
-    ("jockey_change_url", "13. 기수변경 URL"),
-    ("weather_alert_url", "14. 기상특보 URL"),
-    ("corner_pace_url", "15. 코너/주로빠르기 URL"),
-    ("popularity_url", "16. 인기투표 URL"),
-    ("first_odds_url", "17. 1착마 적중승식 URL"),
-    ("second_odds_url", "18. 2착마 적중승식 URL"),
-    ("third_odds_url", "19. 3착마 적중승식 URL"),
-]
-
-
-def force_secret_or_setting(key, default=""):
-    # 1) Streamlit session current value
-    try:
-        if key in st.session_state and st.session_state[key]:
-            return st.session_state[key]
-    except Exception:
-        pass
-
-    # 2) saved settings file
-    try:
-        if "settings" in globals() and isinstance(settings, dict):
-            if settings.get(key):
-                return settings.get(key)
-            if settings.get(key.upper()):
-                return settings.get(key.upper())
-    except Exception:
-        pass
-
-    # 3) Streamlit Secrets [maru] / top-level
-    try:
-        if "maru" in st.secrets:
-            if key in st.secrets["maru"]:
-                return st.secrets["maru"][key]
-            if key.upper() in st.secrets["maru"]:
-                return st.secrets["maru"][key.upper()]
-    except Exception:
-        pass
-
-    try:
-        if key in st.secrets:
-            return st.secrets[key]
-        if key.upper() in st.secrets:
-            return st.secrets[key.upper()]
-    except Exception:
-        pass
-
-    # 4) built-in default API URLs
-    try:
-        if key in FORCE_DEFAULT_URLS:
-            return FORCE_DEFAULT_URLS[key]
-    except Exception:
-        pass
-
-    return default
-
-def force_save_settings(payload):
-    try:
-        save_json(SETTINGS_FILE, payload)
-        return True
-    except Exception:
-        try:
-            Path("maru_settings.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            return True
-        except Exception:
-            return False
-
-def get_data():
-
-    # use_sample 변수 누락 방지
-    use_sample = bool(globals().get("use_sample", False))
-    try:
-        if "use_sample" in st.session_state:
-            use_sample = bool(st.session_state["use_sample"])
-    except Exception:
-        pass
-
-
-    # API URL 변수 누락 방지
-    race_url = resolve_api_url("race_url", ["RACE_URL", "race_url"])
-    entry_url = resolve_api_url("entry_url", ["ENTRY_URL", "entry_url"])
-    horse_url = resolve_api_url("horse_url", ["HORSE_URL", "horse_url"])
-    body_url = resolve_api_url("body_url", ["BODY_URL", "body_url"])
-    gear_url = resolve_api_url("gear_url", ["GEAR_URL", "gear_url"])
-    rating_url = resolve_api_url("rating_url", ["RATING_URL", "rating_url"])
-    odds_url = resolve_api_url("odds_url", ["ODDS_URL", "odds_url"])
-    today_odds_url = resolve_api_url("today_odds_url", ["TODAY_ODDS_URL", "today_odds_url"])
-    result_detail_url = resolve_api_url("result_detail_url", ["RESULT_DETAIL_URL", "result_detail_url"])
-    race_record_url = resolve_api_url("race_record_url", ["RACE_RECORD_URL", "race_record_url"])
-    start_exam_url = resolve_api_url("start_exam_url", ["START_EXAM_URL", "start_exam_url"])
-    judge_url = resolve_api_url("judge_url", ["JUDGE_URL", "judge_url"])
-    jockey_change_url = resolve_api_url("jockey_change_url", ["JOCKEY_CHANGE_URL", "jockey_change_url"])
-    weather_alert_url = resolve_api_url("weather_alert_url", ["WEATHER_ALERT_URL", "weather_alert_url"])
-    corner_pace_url = resolve_api_url("corner_pace_url", ["CORNER_PACE_URL", "corner_pace_url"])
-    popularity_url = resolve_api_url("popularity_url", ["POPULARITY_URL", "popularity_url"])
-    first_odds_url = resolve_api_url("first_odds_url", ["FIRST_ODDS_URL", "first_odds_url"])
-    second_odds_url = resolve_api_url("second_odds_url", ["SECOND_ODDS_URL", "second_odds_url"])
-    third_odds_url = resolve_api_url("third_odds_url", ["THIRD_ODDS_URL", "third_odds_url"])
-
-    urls = {
-        "race":race_url,
-        "entry":entry_url,
-        "horse":horse_url,
-        "body":body_url,
-        "gear":gear_url,
-        "rating":rating_url,
-        "odds":odds_url,
-        "today_odds":today_odds_url,
-        "result_detail":result_detail_url,
-        "race_record":race_record_url,
-        "start_exam":start_exam_url,
-        "judge":judge_url,
-        "jockey_change":jockey_change_url,
-        "weather_alert":weather_alert_url,
-        "corner_pace":corner_pace_url,
-        "popularity":popularity_url,
-        "first_odds":first_odds_url,
-        "second_odds":second_odds_url,
-        "third_odds":third_odds_url,
-    }
+def fetch_all_live(rc_date, meet, race_no, selected_keys):
     data = {}
-    errors = []
-    for name, url in urls.items():
-        df, err = fetch_api(url)
-        df = smart_current_filter(df, name)
-        data[name] = smart_current_filter(df, name)
-        if err:
-            errors.append(f"{name}:{err}")
+    statuses = []
+    progress = st.progress(0)
+    label_map = dict(API_LABELS)
+    for i, key in enumerate(selected_keys):
+        df, msg, used_url = fetch_one_api(key, rc_date, meet, race_no)
+        data[key] = df
+        statuses.append({
+            "API": label_map.get(key, key),
+            "key": key,
+            "행수": len(df),
+            "컬럼수": len(df.columns) if not df.empty else 0,
+            "상태": msg,
+            "요청URL": mask_key(used_url),
+        })
+        progress.progress((i+1)/max(1,len(selected_keys)))
+    progress.empty()
+    pd.DataFrame(statuses).to_csv(API_STATUS_FILE, index=False, encoding="utf-8-sig")
+    return data, pd.DataFrame(statuses)
 
-    if bool(globals().get('use_sample', locals().get('use_sample', False))) and data.get("entry", pd.DataFrame()).empty and data.get("horse", pd.DataFrame()).empty:
-        race, horse, risk = sample_data()
-        data["race"] = race
-        data["entry"] = horse
-        data["horse"] = horse
-        data["start_exam"] = risk
+def render():
+    css()
+    st.markdown("""
+<div class="hero">
+<h2>🏇 MARU KRA 실시간 19API HUB</h2>
+<div class="muted">키/URL 재입력 없음 · 원본 NO_REINPUT API 주소 유지 · 실시간 호출 · 모바일/PC 허브 저장/불러오기</div>
+</div>
+""", unsafe_allow_html=True)
 
-    return data, fetch_env(), errors
-
-
-
-
-
-
-def horse_no_col(df):
-    """
-    실제 구매용 마번 컬럼만 사용합니다.
-    enNo/hrNo/age/rcNo/meet/rating/chaksun 등은 절대 마번으로 쓰지 않습니다.
-    """
-    if df is None or df.empty:
-        return None
-
-    allowed_exact = ["chulNo", "chulno", "chul_no", "출전번호", "출전마번", "마번"]
-    banned_words = ["enno", "hrno", "horseno", "age", "rcno", "meet", "rating", "chaksun", "prize", "amt"]
-
-    for key in allowed_exact:
-        for c in df.columns:
-            if str(c).lower() == key.lower():
-                vals = pd.to_numeric(df[c], errors="coerce")
-                if vals.between(1, 14, inclusive="both").sum() >= 3:
-                    return c
-
-    for c in df.columns:
-        cl = str(c).lower()
-        if any(b in cl for b in banned_words):
-            continue
-        if "chul" in cl or "출전" in cl or "마번" in cl:
-            vals = pd.to_numeric(df[c], errors="coerce")
-            if vals.between(1, 14, inclusive="both").sum() >= 3:
-                return c
-
-    return None
-
-def normalize_horse(df):
-    if df.empty:
-        return df
-    d = df.copy()
-    c = horse_no_col(d)
-
-    if c:
-        d["마번"] = pd.to_numeric(d[c], errors="coerce")
-
-    # 0/고유번호/결측 제거 가능하도록 NaN 처리
-    if "마번" in d.columns:
-        d["마번"] = pd.to_numeric(d["마번"], errors="coerce")
-        d.loc[~d["마번"].between(1, 30, inclusive="both"), "마번"] = pd.NA
-
-    return d
-
-def make_unique_columns(df):
-    """
-    API마다 같은 컬럼명이 반복될 때 pandas merge 오류를 막기 위해
-    중복 컬럼명을 자동으로 고유하게 바꿉니다.
-    """
-    if df.empty:
-        return df
-    cols = []
-    seen = {}
-    for c in df.columns:
-        c = str(c)
-        if c not in seen:
-            seen[c] = 0
-            cols.append(c)
+    with st.sidebar:
+        st.title("🐎 MARU KRA")
+        st.success("API URL 19개는 원본 ZIP 값 자동 적용")
+        if API_KEY:
+            st.success("공공데이터 API Key 자동 로드됨")
         else:
-            seen[c] += 1
-            cols.append(f"{c}_{seen[c]}")
-    df = df.copy()
-    df.columns = cols
-    return df
-
-def merge_horse(base, df, source_name="api"):
-    """
-    여러 API 데이터를 마번 기준으로 합칩니다.
-    겹치는 컬럼은 source_name을 붙여서 MergeError를 방지합니다.
-    """
-    if base.empty or df.empty:
-        return base
-
-    base = make_unique_columns(base.copy())
-    d = make_unique_columns(df.copy())
-
-    base = normalize_horse(base)
-    d = normalize_horse(d)
-
-    if "마번" not in base.columns or "마번" not in d.columns:
-        return base
-
-    try:
-        d = d.drop_duplicates(subset=["마번"], keep="first")
-    except Exception:
-        pass
-
-    rename_map = {}
-    for c in d.columns:
-        if c != "마번" and c in base.columns:
-            rename_map[c] = f"{c}_{source_name}"
-    if rename_map:
-        d = d.rename(columns=rename_map)
-
-    try:
-        return base.merge(d, on="마번", how="left")
-    except Exception:
-        return base
-
-def num(df, names, default):
-    for c in names:
-        if c in df.columns:
-            return pd.to_numeric(df[c], errors="coerce").fillna(default)
-    return pd.Series([default] * len(df), index=df.index)
-
-def budget_status():
-    df = read_table(RESULT_FILE)
-    if df.empty:
-        return {"today_bet":0, "today_profit":0, "total_profit":0, "entries":0, "locked":False, "reason":"정상"}
-    if "저장시각" in df.columns:
-        df["날짜"] = pd.to_datetime(df["저장시각"], errors="coerce").dt.strftime("%Y-%m-%d")
-    else:
-        df["날짜"] = ""
-    for c in ["투입금", "환급금"]:
-        if c not in df.columns:
-            df[c] = 0
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-    tdf = df[df["날짜"] == today()]
-    today_bet = float(tdf["투입금"].sum())
-    today_return = float(tdf["환급금"].sum())
-    today_profit = today_return - today_bet
-    total_profit = float(df["환급금"].sum() - df["투입금"].sum())
-    entries = int((tdf["투입금"] > 0).sum())
-    locked = False
-    reason = "정상"
-    if today_profit <= -float(daily_loss_limit):
-        locked = True
-        reason = f"하루 손실 {int(daily_loss_limit):,}원 도달"
-    elif entries >= int(daily_entries_limit):
-        locked = True
-        reason = f"하루 {int(daily_entries_limit)}회 완료"
-    elif today_bet >= float(daily_budget):
-        locked = True
-        reason = f"하루 {int(daily_budget):,}원 한도 도달"
-    return {"today_bet":today_bet, "today_profit":today_profit, "total_profit":total_profit, "entries":entries, "locked":locked, "reason":reason}
-
-
-def current_race_ready(result):
-    """
-    현재 경주번호/출발시간이 비어 있거나 조합이 이상하면 실전 추천/저장을 막습니다.
-    """
-    if not result:
-        return False
-    rc = str(result.get("경주번호", "")).strip()
-    combo = str(result.get("공격삼쌍승", "")).strip()
-    if rc in ["", "-", "nan", "None"]:
-        return False
-    parts = [p.strip() for p in combo.replace("/", "-").split("-")]
-    if len(parts) != 3:
-        return False
-    try:
-        nums = [int(p) for p in parts]
-        # 일반 경주 마번 범위 안전장치. 15번 이상은 데이터 섞임 가능성으로 관망 처리.
-        if not all(1 <= n <= 14 for n in nums):
-            return False
-    except Exception:
-        return False
-    return True
-
-
-def hub_headers(title):
-    common_time = ["저장시각","날짜","경마장","경주번호"]
-    if title == "api_status":
-        return common_time + ["API","행수","컬럼수","마번후보","상태"]
-    if title == "score_snapshots":
-        return common_time + ["마번","마명","점수","순위","근거"]
-    if title == "hub_status":
-        return ["저장시각","날짜","경마장","경주번호","연결데이터","추천","판정","상태"]
-    if title == "recommendations":
-        return ["저장시각","날짜","경마장","경주번호","출발시간","판정","공격삼쌍승","방어삼복승","보조삼쌍승","예상배당","신뢰도","추천금액","오늘손익","누적손익","날씨","주로","모래","바람"]
-    if title == "comparisons":
-        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","실제삼쌍","실제삼복","투입금","환급금","수익률","분석결과","메모"]
-    if title == "results":
-        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","투입금","환급금","수익률","분석결과","메모"]
-    return ["저장시각","내용"]
-
-def safe_target_date():
-    try:
-        return str(target_date)
-    except Exception:
-        return today()
-
-def safe_target_rc():
-    try:
-        return int(target_rc_no)
-    except Exception:
-        try:
-            return result.get("경주번호","")
-        except Exception:
-            return ""
-
-def hub_append(title, row):
-    if not sheets_enabled():
-        return False, "Google Sheets 미설정"
-    return append_sheet_row(title, row, hub_headers(title))
-
-def hub_sync_now(data, score_df, result):
-    """
-    실시간 API 수집 결과와 분석 결과를 허브에 저장.
-    같은 실행에서 같은 추천은 중복 저장하지 않도록 session_state key 사용.
-    """
-    if not sheets_enabled():
-        return False, "Google Sheets 미설정"
-
-    now = now_kst_str()
-    d = safe_target_date()
-    rc = safe_target_rc()
-    try:
-        place = track_place
-    except Exception:
-        place = ""
-
-    try:
-        total_rows = sum(len(v) for v in data.values() if v is not None)
-    except Exception:
-        total_rows = 0
-
-    rec = ""
-    judge = ""
-    try:
-        rec = result.get("공격삼쌍승","")
-        judge = result.get("판정","")
-    except Exception:
-        pass
-
-    sync_key = hashlib.md5(f"{d}-{place}-{rc}-{total_rows}-{rec}-{judge}".encode("utf-8")).hexdigest()
-    if st.session_state.get("_hub_last_sync_key") == sync_key:
-        return True, "이미 동기화됨"
-
-    # 1. API 연결 상태 저장
-    for k, v in data.items():
-        try:
-            rows = len(v) if v is not None else 0
-            cols = len(v.columns) if v is not None and not v.empty else 0
-            hcol = ""
-            try:
-                hcol = str(horse_no_col(v)) if v is not None and not v.empty else ""
-            except Exception:
-                hcol = ""
-            hub_append("api_status", {
-                "저장시각": now, "날짜": d, "경마장": place, "경주번호": rc,
-                "API": k, "행수": rows, "컬럼수": cols, "마번후보": hcol,
-                "상태": "OK" if rows > 0 else "EMPTY"
-            })
-        except Exception:
-            pass
-
-    # 2. 말별 점수 상위 저장
-    try:
-        if score_df is not None and not score_df.empty:
-            tmp = score_df.copy().head(30)
-            for idx, r in tmp.iterrows():
-                row = {
-                    "저장시각": now, "날짜": d, "경마장": place, "경주번호": rc,
-                    "마번": r.get("마번",""),
-                    "마명": r.get("마명",""),
-                    "점수": r.get("점수", r.get("score","")),
-                    "순위": int(idx) + 1,
-                    "근거": r.get("근거", r.get("reason",""))
-                }
-                hub_append("score_snapshots", row)
-    except Exception:
-        pass
-
-    # 3. 허브 상태 저장
-    hub_append("hub_status", {
-        "저장시각": now, "날짜": d, "경마장": place, "경주번호": rc,
-        "연결데이터": total_rows, "추천": rec, "판정": judge, "상태": "SYNCED"
-    })
-
-    st.session_state["_hub_last_sync_key"] = sync_key
-    return True, "허브 동기화 완료"
-
-def hub_read_recent(title, limit=100):
-    if not sheets_enabled():
-        return pd.DataFrame()
-    df, err = df_from_worksheet(title, hub_headers(title))
-    if df is None or df.empty:
-        return pd.DataFrame()
-    return df.tail(limit)
-
-
-# 분석/거리 변수 기본값 보강
-distance_type = globals().get("distance_type", "중거리")
-race_distance = globals().get("race_distance", 1200)
-pace_type = globals().get("pace_type", "보통")
-track_bias = globals().get("track_bias", "없음")
-
-def env_bonus(row, env):
-    distance_type = globals().get("distance_type", "중거리")
-    race_distance = globals().get("race_distance", 1200)
-    pace_type = globals().get("pace_type", "보통")
-    track_bias = globals().get("track_bias", "없음")
-    try:
-        distance_type = st.session_state.get("distance_type", distance_type)
-        race_distance = st.session_state.get("race_distance", race_distance)
-        pace_type = st.session_state.get("pace_type", pace_type)
-        track_bias = st.session_state.get("track_bias", track_bias)
-    except Exception:
-        pass
-
-    front = float(row.get("선행력", 70))
-    late = float(row.get("추입력", 70))
-    power = float(row.get("파워", 70))
-    speed = float(row.get("순발력", 70))
-    wet = float(row.get("습주로", 70))
-    sandfit = float(row.get("모래적응", 70))
-    b = 0
-    if env["weather"] in ["비", "눈"] or env["track"] in ["다습", "포화", "불량"]:
-        b += (wet - 70) * 0.13 + (power - 70) * 0.08
-    else:
-        b += (speed - 70) * 0.10 + (front - 70) * 0.06
-    if env["sand"] == "무거움":
-        b += (sandfit - 70) * 0.12
-    if env["wind"] == "맞바람":
-        b += (late - 70) * 0.07 - (front - 75) * 0.04
-    if distance_type == "단거리":
-        b += (speed - 70) * 0.09 + (front - 70) * 0.08
-    elif distance_type == "장거리":
-        b += (power - 70) * 0.08 + (late - 70) * 0.07
-    return round(b, 1)
-
-
-
-
-
-def build_candidate_base_from_all(data):
-    """
-    현재 선택 경주에서 신뢰 가능한 chulNo 소스만 모아 출전마 후보표를 만듭니다.
-    entry의 enNo/hrNo, horse 기본정보는 사용하지 않습니다.
-    """
-    priority_keys = ["body", "gear", "today_odds"]
-    nums = set()
-    names = {}
-
-    for key in priority_keys:
-        df = data.get(key, pd.DataFrame())
-        if df is None or df.empty:
-            continue
-
-        tmp = smart_current_filter(df, key)
-        no_col = horse_no_col(tmp)
-        if not no_col:
-            continue
-
-        tmp = tmp.copy()
-        tmp["_tmp_no"] = pd.to_numeric(tmp[no_col], errors="coerce")
-        tmp = tmp[tmp["_tmp_no"].between(1, 14, inclusive="both")]
-
-        for _, r in tmp.iterrows():
-            n = int(r["_tmp_no"])
-            nums.add(n)
-            for name_col in ["hrName", "마명", "horseName", "hr_name", "rcName"]:
-                if name_col in tmp.columns and pd.notna(r.get(name_col, None)):
-                    names[n] = str(r.get(name_col))
-                    break
-
-    if len(nums) >= 3:
-        return pd.DataFrame([{"마번": n, "마명": names.get(n, f"{n}번")} for n in sorted(nums)])
-
-    return pd.DataFrame()
-
-
-# 기타 분석 변수 기본값 보강
-sim_count = globals().get("sim_count", 100)
-daily_loss_stop = globals().get("daily_loss_stop", 30000)
-daily_entries_limit = globals().get("daily_entries_limit", 3)
-auto_save_reco = globals().get("auto_save_reco", True)
-
-def analyze(data, env):
-    base = normalize_horse(data.get("entry", pd.DataFrame()))
-    if not base.empty and "마번" in base.columns:
-        base = base[pd.to_numeric(base["마번"], errors="coerce").between(1, 30, inclusive="both")].copy()
-
-    if base.empty:
-        base = build_candidate_base_from_all(data)
-
-    if base.empty:
-        return pd.DataFrame(), {
-            "경마장": track_place,
-            "경주번호": "-",
-            "출발시간": "-",
-            "판정": "관망",
-            "공격삼쌍승": "출전마 번호 인식 실패",
-            "방어삼복승": "-",
-            "보조삼쌍승": "-",
-            "놓치기아까운1": "",
-            "놓치기아까운2": "",
-            "예상배당": 0,
-            "신뢰도": 0,
-            "추천금액": 0,
-            "오늘투입": int(budget_status().get("today_bet",0)),
-            "오늘손익": int(budget_status().get("today_profit",0)),
-            "누적손익": int(budget_status().get("total_profit",0)),
-            "오늘진입": int(budget_status().get("entries",0)),
-            "자금상태": "출전마 번호 인식 실패",
-            "기상특보위험": 0,
-        }, []
-
-    for key in ["horse","body","gear","rating","odds","today_odds","start_exam","judge","jockey_change","corner_pace","popularity","first_odds","second_odds","third_odds"]:
-        base = merge_horse(base, data.get(key, pd.DataFrame()), key)
-
-    if "마번" not in base.columns:
-        base["마번"] = range(1, len(base) + 1)
-
-    base["마번"] = pd.to_numeric(base["마번"], errors="coerce")
-    base = base[base["마번"].between(1, 30, inclusive="both")].copy()
-    base["마번"] = base["마번"].astype(int)
-    base = base.drop_duplicates(subset=["마번"], keep="first")
-
-    if base.empty or len(base["마번"].unique()) < 3:
-        return pd.DataFrame(), {
-            "경마장": track_place,
-            "경주번호": "-",
-            "출발시간": "-",
-            "판정": "관망",
-            "공격삼쌍승": "출전마 3두 이상 필요",
-            "방어삼복승": "-",
-            "보조삼쌍승": "-",
-            "놓치기아까운1": "",
-            "놓치기아까운2": "",
-            "예상배당": 0,
-            "신뢰도": 0,
-            "추천금액": 0,
-            "오늘투입": int(budget_status().get("today_bet",0)),
-            "오늘손익": int(budget_status().get("today_profit",0)),
-            "누적손익": int(budget_status().get("total_profit",0)),
-            "오늘진입": int(budget_status().get("entries",0)),
-            "자금상태": "출전마 번호 부족",
-            "기상특보위험": 0,
-        }, []
-
-    h = base.copy()
-
-    recent = num(h, ["최근순위", "최근성적", "rank", "ord", "착순"], 5)
-    win = num(h, ["승률", "winRate"], 10)
-    place = num(h, ["복승률", "placeRate"], 25)
-    rating = num(h, ["레이팅", "rating", "rt"], 65)
-    delta = num(h, ["레이팅변화", "ratingDelta"], 0)
-    weight = num(h, ["부담중량", "weight", "wgBudam"], 55)
-    odds = num(h, ["예상배당", "배당", "odds", "winOdds", "단승배당", "확정배당률"], 12)
-    srisk = num(h, ["출발위험", "startRisk"], 0)
-    rrisk = num(h, ["주행위험", "runRisk"], 0)
-    corner_rank = num(h, ["코너순위", "cornerRank", "passRank", "통과순위", "코너통과순위"], 5)
-    late_gain = num(h, ["4코너상승", "cornerGain", "추입상승", "순위상승"], 0)
-    pace_fast = num(h, ["주로빠르기", "trackSpeed", "paceSpeed", "빠르기"], 0)
-    popularity = num(h, ["인기", "popularity", "인기순위", "인기투표순위"], 5)
-
-    h["환경보정"] = h.apply(lambda r: env_bonus(r, env), axis=1)
-    h["코너보정"] = (10 - corner_rank.clip(1, 10)) * 0.9 + late_gain.clip(-5, 5) * 1.2 + pace_fast.clip(-5, 5) * 0.7
-    h["인기보정"] = (10 - popularity.clip(1, 10)) * 0.55
-
-    h["최종점수"] = (
-        (10 - recent.clip(1, 10)) * weights["recent"]
-        + win.clip(0, 50) * weights["win_rate"]
-        + place.clip(0, 80) * weights["place_rate"]
-        + (rating.clip(40, 100) - 40) * weights["rating"]
-        + delta.clip(-10, 10) * weights["rating_delta"]
-        + odds.clip(1, 100).apply(lambda x: 12 if 6 <= x <= 25 else (7 if 25 < x <= 45 else 2)) * weights["odds_value"]
-        + h["환경보정"] * weights["environment"]
-        + h["코너보정"]
-        + h["인기보정"]
-        - (weight - 54).clip(lower=0) * weights["weight_penalty"]
-        - (srisk * 2 + rrisk * 1.5) * weights["risk_penalty"]
-    )
-
-    weather_alert_df = data.get("weather_alert", pd.DataFrame())
-    alert_risk = 0
-    if not weather_alert_df.empty:
-        alert_text = " ".join(weather_alert_df.astype(str).head(20).values.flatten().tolist())
-        if any(x in alert_text for x in ["강풍","호우","대설","폭염","한파","주의보","경보"]):
-            alert_risk = 1
-
-    volatility = 5.5
-    if env["weather"] in ["비", "눈"]:
-        volatility += 1.8
-    if env["wind"] in ["맞바람", "측풍"]:
-        volatility += 0.8
-    if alert_risk:
-        volatility += 1.2
-    if risk_mode == "안전형":
-        volatility *= 0.9
-    elif risk_mode == "공격형":
-        volatility *= 1.15
-
-    nums = [int(x) for x in h["마번"].tolist() if pd.notna(x) and 1 <= int(x) <= 30]
-    h = h[pd.to_numeric(h["마번"], errors="coerce").between(1, 30, inclusive="both")].copy()
-    scores = h["최종점수"].tolist()
-    counter = Counter()
-    random.seed(42)
-    for _ in range(sim_count):
-        noisy = [(n, s + random.gauss(0, volatility)) for n, s in zip(nums, scores)]
-        top = tuple(str(x[0]) for x in sorted(noisy, key=lambda x: x[1], reverse=True)[:3])
-        counter[top] += 1
-
-    combos = counter.most_common(10)
-    top = combos[0][0]
-    confidence = min(95, max(35, round(combos[0][1] / sim_count * 100 + 48)))
-
-    if confidence >= 75:
-        decision = "소액 공격"
-    elif confidence >= 62:
-        decision = "소액 가능"
-    else:
-        decision = "관망"
-
-    b = budget_status()
-    remaining = max(0, float(daily_budget) - b["today_bet"])
-    unlocked = b["total_profit"] >= profit_unlock or bankroll >= profit_unlock
-
-    if b["locked"] or remaining <= 0:
-        decision = "투자금지"
-        amount = 0
-    elif decision == "관망":
-        amount = 0
-    else:
-        amount = int(min(10000 if unlocked else unit_bet, remaining))
-
-    race = data.get("race", pd.DataFrame()).iloc[0].to_dict() if not data.get("race", pd.DataFrame()).empty else {}
-    result = {
-        "경마장": race.get("경마장", track_place),
-        "경주번호": race.get("경주번호", "-"),
-        "출발시간": race.get("출발시간", "-"),
-        "판정": decision,
-        "공격삼쌍승": " - ".join(top),
-        "방어삼복승": " / ".join(top),
-        "보조삼쌍승": " - ".join(combos[1][0]) if len(combos) > 1 else " - ".join(top),
-        "놓치기아까운1": " - ".join(combos[2][0]) if len(combos) > 2 else "",
-        "놓치기아까운2": " - ".join(combos[3][0]) if len(combos) > 3 else "",
-        "예상배당": round(float(odds.head(3).sum() * 0.9), 1) if len(odds) >= 3 else 46.8,
-        "신뢰도": confidence,
-        "추천금액": amount,
-        "오늘투입": int(b["today_bet"]),
-        "오늘손익": int(b["today_profit"]),
-        "누적손익": int(b["total_profit"]),
-        "오늘진입": int(b["entries"]),
-        "자금상태": b["reason"],
-        "기상특보위험": alert_risk,
-    }
-
-    combo_rows = [{"조합":" - ".join(k), "반복횟수":v, "비율":round(v / sim_count * 100, 1)} for k, v in combos]
-    return h.sort_values("최종점수", ascending=False), result, combo_rows
-
-c1, c2 = st.columns(2)
-if c1.button("데이터 불러오기", use_container_width=True):
-    st.session_state["data"], st.session_state["env"], st.session_state["errors"] = get_data()
-if c2.button("시뮬레이션", use_container_width=True):
-    st.session_state["data"], st.session_state["env"], st.session_state["errors"] = get_data()
-
-if "data" not in st.session_state:
-    st.session_state["data"], st.session_state["env"], st.session_state["errors"] = get_data()
-
-data = st.session_state["data"]
-env = st.session_state["env"]
-errors = st.session_state["errors"]
-
-
-def valid_chulno_base(data):
-    trusted = ["body", "gear", "today_odds"]
-    nums = {}
-    evidence = {}
-
-    for key in trusted:
-        df = data.get(key, pd.DataFrame())
-        if df is None or df.empty:
-            continue
-
-        try:
-            tmp = smart_current_filter(df, key)
-        except Exception:
-            tmp = df.copy()
-
-        if tmp is None or tmp.empty:
-            continue
-
-        chul_cols = []
-        for c in tmp.columns:
-            cl = str(c).lower()
-            if cl == "chulno" or str(c) in ["chulNo", "출전번호", "출전마번", "마번"]:
-                chul_cols.append(c)
-
-        if not chul_cols:
-            continue
-
-        col = chul_cols[0]
-        tmp = tmp.copy()
-        tmp["_valid_chulno"] = pd.to_numeric(tmp[col], errors="coerce")
-        tmp = tmp[tmp["_valid_chulno"].between(1, 14, inclusive="both")]
-
-        for _, r in tmp.iterrows():
-            n = int(r["_valid_chulno"])
-            name = f"{n}번"
-            for nc in ["hrName", "마명", "horseName", "rcName"]:
-                if nc in tmp.columns and pd.notna(r.get(nc, None)) and str(r.get(nc)).strip():
-                    name = str(r.get(nc)).strip()
-                    break
-            nums[n] = name
-            evidence.setdefault(n, set()).add(key)
-
-    rows = []
-    for n in sorted(nums.keys()):
-        ev = ",".join(sorted(evidence.get(n, [])))
-        base_score = 50 + len(evidence.get(n, [])) * 5
-        rows.append({"마번": n, "마명": nums[n], "점수": base_score, "근거": ev})
-    return pd.DataFrame(rows)
-
-def valid_combo_only(combo):
-    try:
-        parts = [int(x.strip()) for x in str(combo).replace("/", "-").split("-") if str(x).strip()]
-        return len(parts) == 3 and len(set(parts)) == 3 and all(1 <= n <= 14 for n in parts)
-    except Exception:
-        return False
-
-def combo_inside_valid_nums(combo, valid_nums):
-    try:
-        parts = [int(x.strip()) for x in str(combo).replace("/", "-").split("-") if str(x).strip()]
-        return len(parts) == 3 and all(n in valid_nums for n in parts)
-    except Exception:
-        return False
-
-def filter_combos_to_valid(combos, valid_nums):
-    if not combos:
-        return []
-    valid_nums = set(int(x) for x in valid_nums)
-    out = []
-    for c in combos:
-        try:
-            combo_text = c.get("조합", c.get("combo", c.get("공격삼쌍승", "")))
-            if valid_combo_only(combo_text) and combo_inside_valid_nums(combo_text, valid_nums):
-                out.append(c)
-        except Exception:
-            pass
-    return out
-
-def force_chulno_only_after_analysis(data, score_df, result, combos):
-    base = valid_chulno_base(data)
-
-    if base.empty or len(base) < 3:
-        if result:
-            result["판정"] = "관망"
-            result["추천금액"] = 0
-            result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
-            result["공격삼쌍승"] = "-"
-            result["방어삼복승"] = "-"
-            result["보조삼쌍승"] = "-"
-            result["예상배당"] = 0
-            result["자금상태"] = "현재 경주 chulNo 부족 / 점수표 생성 차단"
-        return base, result, []
-
-    valid_nums = set(base["마번"].astype(int).tolist())
-    clean_score = base.copy()
-
-    # 기존 점수표에 같은 마번이 있을 때만 점수 반영
-    try:
-        if score_df is not None and not score_df.empty and "마번" in score_df.columns:
-            tmp = score_df.copy()
-            tmp["마번"] = pd.to_numeric(tmp["마번"], errors="coerce")
-            tmp = tmp[tmp["마번"].isin(valid_nums)]
-            if "점수" in tmp.columns and not tmp.empty:
-                score_map = dict(zip(tmp["마번"].astype(int), tmp["점수"]))
-                clean_score["점수"] = clean_score["마번"].map(score_map).fillna(clean_score["점수"])
-    except Exception:
-        pass
-
-    clean_combos = filter_combos_to_valid(combos, valid_nums)
-
-    if result:
-        combo = result.get("공격삼쌍승", "")
-        if (not valid_combo_only(combo)) or (not combo_inside_valid_nums(combo, valid_nums)):
-            result["판정"] = "관망"
-            result["추천금액"] = 0
-            result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
-            result["공격삼쌍승"] = "-"
-            result["방어삼복승"] = "-"
-            result["보조삼쌍승"] = "-"
-            result["예상배당"] = 0
-            result["자금상태"] = "현재 경주 출전마 외 조합 차단"
-
-    return clean_score, result, clean_combos
-
-score_df, result, combos = analyze(data, env)
-score_df, result, combos = force_chulno_only_after_analysis(data, score_df, result, combos)
-if result and not current_race_ready(result):
-    result["판정"] = "관망"
-    result["추천금액"] = 0
-    result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
-    result["자금상태"] = "현재 경주정보 부족 / 데이터 섞임 방지"
-
-try:
-    entry_candidate = horse_no_col(data.get("entry", pd.DataFrame()))
-    if not entry_candidate:
-        st.info("마번 기준: entry에 chulNo가 없어 body/gear/today_odds의 chulNo를 우선 사용합니다.")
-except Exception:
-    pass
-
-
-def is_valid_combo_text(x):
-    s = str(x or "")
-    parts = [p.strip() for p in s.replace("/", "-").split("-")]
-    if len(parts) != 3:
-        return False
-    try:
-        nums = [int(p) for p in parts]
-        return all(1 <= n <= 30 for n in nums)
-    except Exception:
-        return False
-
-if auto_save_reco and result and result.get("공격삼쌍승","-") != "-" and valid_combo_only(result.get("공격삼쌍승","")) and current_race_ready(result) and is_valid_combo_text(result.get("공격삼쌍승","")) and int(result.get("신뢰도",0)) > 0:
-    append_table(RECO_FILE, {
-        "저장시각":now_kst_str(),
-        "날짜":target_date if "target_date" in globals() else today(),
-        **result,
-        "날씨":env.get("weather",""),
-        "주로":env.get("track",""),
-        "모래":env.get("sand",""),
-        "바람":env.get("wind","")
-    })
-
-rows = sum(len(v) for v in data.values())
-reco_df = read_table(RECO_FILE)
-compare_df = read_table(COMPARE_FILE)
-
-st.info(f"선택 기준: {target_date} · {track_place} · {int(target_rc_no)}R · 엄격필터={strict_race_filter}")
-m1, m2, m3 = st.columns(3)
-st.caption("URL 예시는 API Key를 숨겨 표시합니다. 과거 캡처에 키가 보였다면 재발급을 권장합니다.")
-m1.metric("연결 데이터", rows)
-m2.metric("추천 저장", len(reco_df))
-m3.metric("비교 저장", len(compare_df))
-
-
-st.divider()
-pc_left, pc_mid, pc_right = st.columns([1.15, 1.4, 1.0])
-
-with pc_left:
-    st.subheader("현재 선택")
-    try:
-        st.write(f"**날짜:** {target_date}")
-        st.write(f"**경마장:** {track_place}")
-        st.write(f"**경주번호:** {int(target_rc_no)}R")
-        if "strict_race_filter" in globals():
-            st.write(f"**엄격 필터:** {strict_race_filter}")
-    except Exception:
-        st.write(f"**경마장:** {track_place}")
-
-with pc_mid:
-    st.subheader("추천 핵심")
-    try:
-        st.write(f"**판정:** {result.get('판정','대기')}")
-        st.write(f"**공격 삼쌍승:** {result.get('공격삼쌍승','-')}")
-        st.write(f"**방어 삼복승:** {result.get('방어삼복승','-')}")
-        st.write(f"**추천금액:** {result.get('추천금액',0):,}원")
-    except Exception:
-        st.write("분석 대기")
-
-with pc_right:
-    st.subheader("운영 상태")
-    try:
-        st.write(f"**오늘손익:** {result.get('오늘손익',0):,}원")
-        st.write(f"**누적손익:** {result.get('누적손익',0):,}원")
-        st.write(f"**자금상태:** {result.get('자금상태','-')}")
-        st.write(f"**기상특보:** {result.get('기상특보위험',0)}")
-    except Exception:
-        st.write("운영 상태 대기")
-
-st.divider()
-if errors:
-    st.warning(f"보조 API 오류 {len(errors)}개. 핵심 데이터가 있으면 분석은 계속됩니다.")
-    with st.expander("오류 상세 보기"):
-        st.write(errors)
-
-st.subheader("최종 판단")
-st.success(result.get("판정", "대기"))
-
-a, b, c = st.columns(3)
-a.metric("신뢰도", f"{result.get('신뢰도', 0)}%")
-b.metric("추천금액", f"{result.get('추천금액', 0):,}원")
-c.metric("오늘진입", f"{result.get('오늘진입', 0)} / {int(daily_entries_limit)}")
-
-st.info(f"{result.get('경마장','-')} {result.get('경주번호','-')}R · 출발 {result.get('출발시간','-')}")
-
-st.markdown("### 공격 삼쌍승")
-st.markdown(f"## {result.get('공격삼쌍승','-')}")
-st.caption(f"예상배당: {result.get('예상배당','-')}배")
-
-st.markdown("### 손실 방어 조합")
-st.write(f"방어 삼복승: **{result.get('방어삼복승','-')}**")
-st.write(f"보조 삼쌍승: **{result.get('보조삼쌍승','-')}**")
-st.write(f"놓치기 아까운 삼쌍승: **{result.get('놓치기아까운1','')}** / **{result.get('놓치기아까운2','')}**")
-
-st.markdown("### 자금 잠금 규칙")
-st.write(f"오늘 투입: **{result.get('오늘투입',0):,}원 / {int(daily_budget):,}원**")
-st.write(f"오늘 손익: **{result.get('오늘손익',0):,}원**")
-st.write(f"누적 손익: **{result.get('누적손익',0):,}원**")
-st.write(f"상태: **{result.get('자금상태','-')}**")
-st.write(f"기상특보 위험: **{result.get('기상특보위험',0)}**")
-
-st.markdown("### 환경 반영")
-e1, e2, e3 = st.columns(3)
-e1.metric("날씨", env.get("weather", "-"))
-e2.metric("주로", env.get("track", "-"))
-e3.metric("모래", env.get("sand", "-"))
-
-st.link_button("KRA 공식 바로가기", kra_url, use_container_width=True)
-st.caption("자동구매 아님 · 공식 화면 이동 · 수익 보장 아님 · 손실 제한/기록학습")
-
-with st.expander("결과 입력 / 예상비교 / 자가학습"):
-    actual_combo = st.text_input("실제 삼쌍 1-2-3", placeholder="예: 5-11-2")
-    actual_trio = st.text_input("실제 삼복 1~3착", placeholder="예: 5/11/2")
-    bet_amount = st.number_input("투입금", min_value=0, value=int(result.get("추천금액",0)), step=100)
-    return_amount = st.number_input("환급금", min_value=0, value=0, step=100)
-    memo = st.text_input("메모")
-    if st.button("결과 저장하고 AI 학습", use_container_width=True):
-        pred = result.get("공격삼쌍승","").replace(" ","")
-        actual = actual_combo.replace(" ","")
-        trio_pred = set(result.get("방어삼복승","").replace(" ","").split("/"))
-        trio_actual = set((actual_trio or actual_combo).replace(" ","").replace("-","/").split("/"))
-        tri_hit = int(pred == actual)
-        trio_hit = int(trio_pred == trio_actual)
-        roi = ((return_amount - bet_amount) / bet_amount) if bet_amount > 0 else 0
-        if tri_hit:
-            typ = "삼쌍승 적중"
-        elif trio_hit:
-            typ = "삼복승 방어"
-        elif return_amount > 0:
-            typ = "부분환급"
-        else:
-            typ = "미적중"
-        rec = {
-            "저장시각":now_kst_str(),
-            "날짜":today(),
-            **result,
-            "투입금":bet_amount,
-            "환급금":return_amount,
-            "수익률":roi,
-            "실제삼쌍":actual_combo,
-            "실제삼복":actual_trio,
-            "분석결과":typ,
-            "메모":memo
-        }
-        append_table(RESULT_FILE, rec)
-        append_table(COMPARE_FILE, rec)
-        st.success(f"저장 완료: {typ}")
-
-with st.expander("숨겨진 분석 / 저장 데이터"):
-    
-    st.subheader("API 원본 컬럼 진단")
-    debug_keys = ["race", "entry", "horse", "body", "gear", "rating", "odds", "today_odds", "corner_pace"]
-    rows = []
-    for k in debug_keys:
-        df = data.get(k, pd.DataFrame())
-        if df is not None and not df.empty:
-            rows.append({
-                "API": k,
-                "행수": len(df),
-                "컬럼수": len(df.columns),
-                "마번후보": str(horse_no_col(df)),
-                "컬럼목록": ", ".join([str(c) for c in list(df.columns)[:25]])
-            })
-        else:
-            rows.append({"API": k, "행수": 0, "컬럼수": 0, "마번후보": "", "컬럼목록": ""})
-    st.dataframe(pd.DataFrame(rows), use_container_width=True)
-
-    st.subheader("2번 출전 등록말 원본 미리보기")
-    if not data.get("entry", pd.DataFrame()).empty:
-        st.dataframe(data.get("entry", pd.DataFrame()).head(20), use_container_width=True)
-    else:
-        st.write("entry 데이터 없음")
-
-    st.subheader("API 연결 데이터 행수")
-    st.caption("점수표와 추천은 body/gear/today_odds의 chulNo만 사용합니다. enNo/hrNo/chaksun은 마번으로 쓰지 않습니다.")
-    st.dataframe(pd.DataFrame([{"API":k, "행수":len(v)} for k, v in data.items()]), use_container_width=True)
-
-    st.subheader("말별 점수표(chulNo)")
-    st.dataframe(score_df, use_container_width=True)
-
-    st.subheader("삼쌍승 시뮬레이션")
-    st.dataframe(pd.DataFrame(combos), use_container_width=True)
-
-    st.subheader("과거 추천 로그")
-    st.dataframe(read_table(RECO_FILE).tail(100), use_container_width=True)
-
-    st.subheader("과거 예상 vs 실제 비교 로그")
-    st.dataframe(read_table(COMPARE_FILE).tail(100), use_container_width=True)
-
-    st.subheader("자동 완성된 URL 예시 — API Key 숨김")
-    examples = []
-    for name, url in {
-        "race":race_url,
-        "entry":entry_url,
-        "horse":horse_url,
-        "rating":rating_url,
-        "today_odds":today_odds_url,
-        "corner_pace":corner_pace_url,
-    }.items():
-        examples.append({"API":name, "요청URL":mask_secret_url(build_api_url(url))})
-    st.dataframe(pd.DataFrame(examples), use_container_width=True)
-
-
-
-st.divider()
-st.subheader("PC 상세 분석 패널")
-
-tab_score, tab_sim, tab_api, tab_logs = st.tabs(["말별 점수표(chulNo)", "삼쌍승 시뮬레이션", "API 원본/진단", "과거 로그"])
-
-with tab_score:
-    try:
-        st.dataframe(score_df, use_container_width=True, height=420)
-    except Exception:
-        st.write("점수표 없음")
-
-with tab_sim:
-    try:
-        st.dataframe(pd.DataFrame(combos), use_container_width=True, height=360)
-    except Exception:
-        st.write("시뮬레이션 없음")
-
-with tab_api:
-    try:
-        api_rows = []
-        for k, v in data.items():
-            api_rows.append({
-                "API": k,
-                "행수": len(v) if v is not None else 0,
-                "컬럼수": len(v.columns) if v is not None and not v.empty else 0,
-                "마번후보": str(horse_no_col(v)) if v is not None and not v.empty else ""
-            })
-        st.dataframe(pd.DataFrame(api_rows), use_container_width=True, height=360)
-        if "entry" in data and not data["entry"].empty:
-            st.write("2번 출전 등록말 원본 미리보기")
-            st.dataframe(data["entry"].head(50), use_container_width=True, height=360)
-    except Exception:
-        st.write("API 진단 표시 실패")
-
-with tab_logs:
-    try:
-        col_a, col_b = st.columns(2)
+            st.error("API Key가 Secrets에 없어 실시간 호출 불가")
+            st.caption("앱 화면에는 키 입력칸을 만들지 않았습니다. Streamlit Secrets에 한 번만 저장하세요.")
+
+        target_date = st.text_input("분석 날짜", value=today_kst())
+        meet = st.selectbox("경마장", ["서울","부산경남","제주"], index=0)
+        race_no = st.number_input("경주번호", min_value=1, max_value=20, value=1, step=1)
+        sim_count = st.slider("시뮬레이션", 300, 5000, 1200, step=100)
+        risk_mode = st.selectbox("전략", ["균형형","안전형","공격형"], index=0)
+        auto_refresh = st.selectbox("자동 새로고침", [0, 30, 60, 120, 300], index=0)
+        st.divider()
+        core_default = ["race_url","entry_url","body_url","rating_url","today_odds_url","jockey_change_url","corner_pace_url","popularity_url"]
+        selected = st.multiselect(
+            "실시간 호출 API",
+            options=[k for k,_ in API_LABELS],
+            default=core_default,
+            format_func=lambda k: dict(API_LABELS).get(k,k),
+        )
+        with st.expander("API URL 확인/복사용", expanded=False):
+            for k, label in API_LABELS:
+                st.caption(f"{label}: {get_url(k)}")
+        st.divider()
+        st.caption("Google Sheet 허브는 Secrets의 SHEET_ID/SERVICE_ACCOUNT_JSON이 있으면 사용됩니다.")
+
+    rc_date = str(target_date).replace("-","").strip() or today_kst()
+
+    if auto_refresh:
+        st.caption(f"자동 새로고침 {auto_refresh}초")
+        time.sleep(0.1)
+
+    local_hub = load_local_hub()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("API Key", "자동로드" if API_KEY else "없음")
+    c2.metric("허브 로컬", f"{len(local_hub)}건")
+    c3.metric("경주", f"{meet} {int(race_no)}R")
+    c4.metric("날짜", rc_date)
+
+    tab1, tab2, tab3, tab4 = st.tabs(["🏇 실시간 분석", "📦 허브", "🔌 API 진단", "📘 Secrets"])
+
+    with tab1:
+        st.markdown("### 실시간 KRA 분석")
+        if "live_data" not in st.session_state:
+            st.session_state["live_data"] = {}
+            st.session_state["api_status"] = pd.DataFrame()
+
+        col_a, col_b = st.columns([1,1])
         with col_a:
-            st.write("과거 추천 로그")
-            st.dataframe(read_table(RECO_FILE).tail(100), use_container_width=True, height=360)
+            run = st.button("실시간 데이터 불러오기", type="primary")
         with col_b:
-            st.write("과거 예상 vs 실제 비교 로그")
-            st.dataframe(read_table(COMPARE_FILE).tail(100), use_container_width=True, height=360)
-    except Exception:
-        st.write("로그 없음")
+            run_sim = st.button("불러오기 + 시뮬레이션")
 
+        if run or run_sim or not st.session_state["live_data"]:
+            data, status = fetch_all_live(rc_date, meet, int(race_no), selected)
+            st.session_state["live_data"] = data
+            st.session_state["api_status"] = status
 
+        data = st.session_state["live_data"]
+        status = st.session_state["api_status"]
 
-st.divider()
-st.subheader("허브 실시간 패널")
-try:
-    if sheets_enabled():
-        st.success("Google Sheets 허브 사용 중: PC/모바일 기록 공유")
-    else:
-        st.info("Google Sheets 허브 미설정: Streamlit Secrets에 SHEET_ID와 SERVICE_ACCOUNT_JSON을 넣어야 PC/모바일 실시간 공유가 됩니다.")
-except Exception:
-    st.info("허브 상태 확인 대기")
+        env = fetch_weather(meet)
+        base = build_base_horses(data, rc_date, meet, int(race_no))
+        horses = merge_score_features(base, data, rc_date, meet, int(race_no))
+        score_df, result, combos = score_and_recommend(horses, env, sim_count, risk_mode)
 
-hub_tab1, hub_tab2, hub_tab3 = st.tabs(["허브 상태", "허브 점수 기록", "허브 추천/비교"])
-
-with hub_tab1:
-    try:
-        if hub_read_mode:
-            st.dataframe(hub_read_recent("hub_status", 100), use_container_width=True, height=320)
+        live_rows = sum(len(v) for v in data.values()) if data else 0
+        if live_rows == 0:
+            st.warning("실시간 API 데이터 0건입니다. 현재 화면은 샘플/보정 분석입니다. API Key/승인/상세 URL을 확인해야 합니다.")
         else:
-            st.write("허브 불러오기 OFF")
-    except Exception:
-        st.write("허브 상태 없음")
+            st.success(f"실시간 API 데이터 {live_rows}행 반영")
 
-with hub_tab2:
-    try:
-        if hub_read_mode:
-            st.dataframe(hub_read_recent("score_snapshots", 100), use_container_width=True, height=420)
+        left, right = st.columns([1.1, 1])
+        with left:
+            st.markdown(f"""
+<div class="green">
+<div class="muted">{meet} {int(race_no)}R · {rc_date} · {env.get('날씨')}/{env.get('주로')}</div>
+<div class="combo">{result.get('공격삼쌍승','-')}</div>
+<div><b>{result.get('판정','대기')}</b> · 추천금액 {int(result.get('추천금액',0)):,}원</div>
+<hr>
+<b>방어:</b> {result.get('방어삼복승','-')}<br>
+<b>예상배당:</b> {result.get('예상배당',0)}배<br>
+<b>근거:</b> {result.get('근거','')}
+</div>
+""", unsafe_allow_html=True)
+            st.caption("경마 결과는 보장되지 않습니다. 실구매는 본인 판단과 책임, 소액 원칙으로만 진행하세요.")
+
+            if st.button("현재 분석 허브 저장", type="primary"):
+                row = {
+                    "저장시각": now_str(),
+                    "날짜": rc_date,
+                    "경마장": meet,
+                    "경주번호": int(race_no),
+                    "판정": result.get("판정",""),
+                    "공격삼쌍승": result.get("공격삼쌍승",""),
+                    "방어삼복승": result.get("방어삼복승",""),
+                    "예상배당": result.get("예상배당",""),
+                    "신뢰도": result.get("신뢰도",""),
+                    "추천금액": result.get("추천금액",""),
+                    "날씨": env.get("날씨",""),
+                    "주로": env.get("주로",""),
+                    "모래": env.get("모래",""),
+                    "바람": env.get("바람",""),
+                    "실시간행수": live_rows,
+                    "근거": result.get("근거",""),
+                }
+                n = append_local_hub(row)
+                ok, msg = hub_append_sheet("recommendations", row)
+                if ok:
+                    st.success(f"허브 저장 완료: Google Sheet + 로컬 {n}건")
+                else:
+                    st.info(f"로컬 허브 저장 완료 {n}건 / Google Sheet: {msg}")
+
+        with right:
+            m1,m2,m3 = st.columns(3)
+            m1.metric("신뢰도", f"{result.get('신뢰도',0)}%")
+            m2.metric("실시간행", live_rows)
+            m3.metric("추천금액", f"{int(result.get('추천금액',0)):,}")
+            st.markdown("#### 말별 점수")
+            st.dataframe(score_df, use_container_width=True, height=360)
+
+        st.markdown("#### 시뮬레이션 조합")
+        st.dataframe(pd.DataFrame(combos), use_container_width=True, height=260)
+
+    with tab2:
+        st.markdown("### 허브 저장/불러오기")
+        sheet_df = hub_read_sheet("recommendations", 100)
+        if not sheet_df.empty:
+            st.success(f"Google Sheet 허브 {len(sheet_df)}건 불러옴")
+            st.dataframe(sheet_df, use_container_width=True, height=420)
         else:
-            st.write("허브 불러오기 OFF")
-    except Exception:
-        st.write("허브 점수 기록 없음")
+            st.info("Google Sheet 허브가 없거나 비어 있습니다. 로컬 허브를 표시합니다.")
+            st.dataframe(load_local_hub().tail(100), use_container_width=True, height=420)
 
-with hub_tab3:
-    try:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.write("허브 추천 기록")
-            st.dataframe(hub_read_recent("recommendations", 100), use_container_width=True, height=360)
-        with c2:
-            st.write("허브 비교 기록")
-            st.dataframe(hub_read_recent("comparisons", 100), use_container_width=True, height=360)
-    except Exception:
-        st.write("허브 추천/비교 기록 없음")
+    with tab3:
+        st.markdown("### API 진단")
+        if not st.session_state.get("api_status", pd.DataFrame()).empty:
+            st.dataframe(st.session_state["api_status"], use_container_width=True, height=420)
+        else:
+            st.write("아직 API 호출 전입니다.")
+        st.markdown("#### 원본 ZIP 기반 API URL")
+        st.dataframe(pd.DataFrame([{"API":label, "key":k, "URL":get_url(k)} for k,label in API_LABELS]), use_container_width=True)
+
+    with tab4:
+        st.markdown("""
+### Streamlit Secrets 예시
+
+앱 화면에서는 키를 다시 입력하지 않습니다. Streamlit Cloud에서 한 번만 저장하세요.
+
+```toml
+[maru]
+API_KEY = "공공데이터_일반인증키"
+```
+
+Google Sheet 허브까지 쓰려면:
+
+```toml
+[google_sheets]
+SHEET_ID = "구글시트_ID"
+SERVICE_ACCOUNT_JSON = "서비스계정_JSON_전체"
+```
+
+현재 ZIP은 사용자가 올린 `MARU_KRA_NO_REINPUT_API_ENGINE(1).zip` 안의 API URL 19개를 유지해서 만든 실시간판입니다.
+""")
+
+render()
