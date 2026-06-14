@@ -175,8 +175,30 @@ st.session_state["manual_track"] = manual_track
 st.session_state["manual_sand"] = manual_sand
 st.session_state["manual_wind"] = manual_wind
 
+st.sidebar.divider()
+st.sidebar.subheader("거리/경주 분석 설정")
+distance_type = st.sidebar.selectbox("거리 유형", ["단거리", "중거리", "장거리"], index=1)
+race_distance = st.sidebar.number_input("경주 거리(m)", min_value=800, max_value=3200, value=1200, step=100)
+pace_type = st.sidebar.selectbox("전개 예상", ["빠름", "보통", "느림"], index=1)
+track_bias = st.sidebar.selectbox("주로 편향", ["없음", "안쪽 유리", "바깥 유리", "선행 유리", "추입 유리"], index=0)
+st.session_state["distance_type"] = distance_type
+st.session_state["race_distance"] = race_distance
+st.session_state["pace_type"] = pace_type
+st.session_state["track_bias"] = track_bias
 
-_force_payload = {"api_key": api_key, "target_date": target_date, "track_place": track_place, "target_rc_no": int(target_rc_no)}
+st.sidebar.divider()
+st.sidebar.subheader("자금/저장 설정")
+daily_loss_stop = st.sidebar.number_input("하루 손실 제한", min_value=0, max_value=1000000, value=30000, step=1000)
+daily_entries_limit = st.sidebar.number_input("오늘 진입 제한", min_value=0, max_value=20, value=3, step=1)
+auto_save_reco = st.sidebar.checkbox("추천 자동 저장", value=True)
+st.session_state["daily_loss_stop"] = daily_loss_stop
+st.session_state["daily_entries_limit"] = daily_entries_limit
+st.session_state["auto_save_reco"] = auto_save_reco
+
+
+
+
+_force_payload = {"api_key": api_key, "target_date": target_date, "track_place": track_place, "target_rc_no": int(target_rc_no), "distance_type": distance_type, "race_distance": int(race_distance), "pace_type": pace_type, "track_bias": track_bias}
 for _key, _label in FORCE_API_KEYS:
     _force_payload[_key] = globals().get(_key, "")
 
@@ -1438,7 +1460,26 @@ def hub_read_recent(title, limit=100):
         return pd.DataFrame()
     return df.tail(limit)
 
+
+# 분석/거리 변수 기본값 보강
+distance_type = globals().get("distance_type", "중거리")
+race_distance = globals().get("race_distance", 1200)
+pace_type = globals().get("pace_type", "보통")
+track_bias = globals().get("track_bias", "없음")
+
 def env_bonus(row, env):
+    distance_type = globals().get("distance_type", "중거리")
+    race_distance = globals().get("race_distance", 1200)
+    pace_type = globals().get("pace_type", "보통")
+    track_bias = globals().get("track_bias", "없음")
+    try:
+        distance_type = st.session_state.get("distance_type", distance_type)
+        race_distance = st.session_state.get("race_distance", race_distance)
+        pace_type = st.session_state.get("pace_type", pace_type)
+        track_bias = st.session_state.get("track_bias", track_bias)
+    except Exception:
+        pass
+
     front = float(row.get("선행력", 70))
     late = float(row.get("추입력", 70))
     power = float(row.get("파워", 70))
@@ -1499,6 +1540,13 @@ def build_candidate_base_from_all(data):
         return pd.DataFrame([{"마번": n, "마명": names.get(n, f"{n}번")} for n in sorted(nums)])
 
     return pd.DataFrame()
+
+
+# 기타 분석 변수 기본값 보강
+sim_count = globals().get("sim_count", 100)
+daily_loss_stop = globals().get("daily_loss_stop", 30000)
+daily_entries_limit = globals().get("daily_entries_limit", 3)
+auto_save_reco = globals().get("auto_save_reco", True)
 
 def analyze(data, env):
     base = normalize_horse(data.get("entry", pd.DataFrame()))
