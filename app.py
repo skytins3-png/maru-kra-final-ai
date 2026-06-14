@@ -425,6 +425,51 @@ if st.sidebar.button("API 설정 초기화", use_container_width=True):
         SETTINGS_FILE.unlink()
     st.sidebar.warning("앱 내부 저장값 초기화 완료. Secrets 값은 유지됩니다.")
 
+
+def resolve_api_url(var_name, secret_keys=None, default=""):
+    """
+    API URL 변수가 누락되어도 앱이 멈추지 않게 Secrets/settings/session_state에서 안전하게 찾습니다.
+    """
+    secret_keys = secret_keys or []
+    try:
+        val = globals().get(var_name, "")
+        if val:
+            return val
+    except Exception:
+        pass
+
+    try:
+        if "settings" in globals() and isinstance(settings, dict):
+            for k in [var_name] + secret_keys:
+                if settings.get(k):
+                    return settings.get(k)
+    except Exception:
+        pass
+
+    try:
+        if "maru" in st.secrets:
+            for k in secret_keys:
+                if k in st.secrets["maru"]:
+                    return st.secrets["maru"][k]
+    except Exception:
+        pass
+
+    try:
+        for k in secret_keys:
+            if k in st.secrets:
+                return st.secrets[k]
+    except Exception:
+        pass
+
+    try:
+        for k in [var_name] + secret_keys:
+            if k in st.session_state:
+                return st.session_state[k]
+    except Exception:
+        pass
+
+    return default
+
 def build_api_url(url):
     """
     안전형 자동완성:
@@ -765,7 +810,51 @@ def clean_result_for_display(result, data):
         result["예상배당"] = 0
     return result
 
+
+# 전역 API URL 기본값 보강
+race_url = globals().get("race_url", "")
+entry_url = globals().get("entry_url", "")
+horse_url = globals().get("horse_url", "")
+body_url = globals().get("body_url", "")
+gear_url = globals().get("gear_url", "")
+rating_url = globals().get("rating_url", "")
+odds_url = globals().get("odds_url", "")
+today_odds_url = globals().get("today_odds_url", "")
+result_detail_url = globals().get("result_detail_url", "")
+race_record_url = globals().get("race_record_url", "")
+start_exam_url = globals().get("start_exam_url", "")
+judge_url = globals().get("judge_url", "")
+jockey_change_url = globals().get("jockey_change_url", "")
+weather_alert_url = globals().get("weather_alert_url", "")
+corner_pace_url = globals().get("corner_pace_url", "")
+popularity_url = globals().get("popularity_url", "")
+first_odds_url = globals().get("first_odds_url", "")
+second_odds_url = globals().get("second_odds_url", "")
+third_odds_url = globals().get("third_odds_url", "")
+
 def get_data():
+
+    # API URL 변수 누락 방지
+    race_url = resolve_api_url("race_url", ["RACE_URL", "race_url"])
+    entry_url = resolve_api_url("entry_url", ["ENTRY_URL", "entry_url"])
+    horse_url = resolve_api_url("horse_url", ["HORSE_URL", "horse_url"])
+    body_url = resolve_api_url("body_url", ["BODY_URL", "body_url"])
+    gear_url = resolve_api_url("gear_url", ["GEAR_URL", "gear_url"])
+    rating_url = resolve_api_url("rating_url", ["RATING_URL", "rating_url"])
+    odds_url = resolve_api_url("odds_url", ["ODDS_URL", "odds_url"])
+    today_odds_url = resolve_api_url("today_odds_url", ["TODAY_ODDS_URL", "today_odds_url"])
+    result_detail_url = resolve_api_url("result_detail_url", ["RESULT_DETAIL_URL", "result_detail_url"])
+    race_record_url = resolve_api_url("race_record_url", ["RACE_RECORD_URL", "race_record_url"])
+    start_exam_url = resolve_api_url("start_exam_url", ["START_EXAM_URL", "start_exam_url"])
+    judge_url = resolve_api_url("judge_url", ["JUDGE_URL", "judge_url"])
+    jockey_change_url = resolve_api_url("jockey_change_url", ["JOCKEY_CHANGE_URL", "jockey_change_url"])
+    weather_alert_url = resolve_api_url("weather_alert_url", ["WEATHER_ALERT_URL", "weather_alert_url"])
+    corner_pace_url = resolve_api_url("corner_pace_url", ["CORNER_PACE_URL", "corner_pace_url"])
+    popularity_url = resolve_api_url("popularity_url", ["POPULARITY_URL", "popularity_url"])
+    first_odds_url = resolve_api_url("first_odds_url", ["FIRST_ODDS_URL", "first_odds_url"])
+    second_odds_url = resolve_api_url("second_odds_url", ["SECOND_ODDS_URL", "second_odds_url"])
+    third_odds_url = resolve_api_url("third_odds_url", ["THIRD_ODDS_URL", "third_odds_url"])
+
     urls = {
         "race":race_url,
         "entry":entry_url,
