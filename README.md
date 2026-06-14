@@ -1,14 +1,13 @@
-# MARU KRA NO REINPUT API DISTANCE FIX ENGINE
+# MARU KRA NO REINPUT API WEATHER FIX ENGINE
 
-NameError: distance_type 오류 수정 버전입니다.
+NameError: auto_weather 오류 수정 버전입니다.
 
 ## 수정 내용
 
-- distance_type 기본값 중거리 보강
-- race_distance / pace_type / track_bias 기본값 보강
-- 사이드바 거리/경주 분석 설정 추가
-- 자금/저장 설정 기본값 보강
-- auto_weather 수정 유지
+- auto_weather 기본값 True 보강
+- manual_weather / manual_track / manual_sand / manual_wind 기본값 보강
+- 사이드바 환경/날씨 설정 복구
+- fetch_env() 내부에서 환경 변수 안전 정의
 - API URL 기본값 내장 유지
 - API Key Secrets 자동 불러오기 유지
 - app.py와 pages/hub.py 포함
