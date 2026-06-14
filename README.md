@@ -1,21 +1,19 @@
-# MARU KRA GREEN FOCUS STRONG RECOMMEND ENGINE
+# MARU KRA NO REINPUT API ENGINE
 
-현장용 녹색 집중화면 버전입니다.
+API 주소를 다시 입력하지 않도록 기본 URL을 앱에 내장한 버전입니다.
 
-## 수정 내용
-- 최종결과를 녹색 큰 박스 안에 집중 표시
-- 오늘조합 강력추천 박스 추가
-- 신뢰도 / 예상배당 / 추천금액 / 판정만 크게 표시
-- API 표, 시뮬레이션, 로그, URL 예시는 숨김처리
-- 필요한 경우 펼쳐보기로 확인
-- 관망이면 조합 '-' 처리
-- 강력추천 조건 만족 시 크게 표시
-- 허브 저장 / Telegram 알림 기능 유지
-- 경주시간표 30분 전 자동분석 유지
-- API 19개 실시간 수집 유지
-
-## GitHub 업로드
-압축 해제 후 아래 2개만 업로드하세요.
-
+## 업로드
 - app.py
 - requirements.txt
+- pages/hub.py
+
+기존 pages/hub.py는 반드시 덮어쓰기 하세요.
+
+## Streamlit Secrets 최소 설정
+
+```toml
+[maru]
+API_KEY = "공공데이터_API_KEY"
+```
+
+URL은 앱 기본값이 자동 입력됩니다.
