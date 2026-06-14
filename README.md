@@ -1,17 +1,16 @@
-# MARU KRA CHULNO ONLY SCORE ENGINE
+# MARU KRA KST TIME FIXED ENGINE
 
-말별 점수표와 추천 조합을 chulNo 기준으로만 제한한 버전입니다.
+한국 시간 기준으로 날짜가 잡히도록 수정한 버전입니다.
 
 ## 수정 내용
 
-- 말별 점수표를 body / gear / today_odds의 chulNo로만 생성
-- entry enNo 사용 금지
-- horse hrNo 사용 금지
-- age, chaksun, prize, rating 숫자 마번 사용 금지
-- 현재 경주 chulNo 3두 미만이면 관망
-- 1~14번 밖 조합은 시뮬레이션/추천에서 제거
-- 관망이면 조합 표시를 '-'로 처리
-- 잘못된 조합은 저장/허브 동기화 차단
+- Streamlit Cloud 서버시간 대신 Asia/Seoul 기준 사용
+- today()를 한국시간 기준 YYYYMMDD로 고정
+- 분석 날짜 기본값을 한국 날짜로 표시
+- 저장시각도 한국시간으로 저장
+- 허브/로그 날짜도 한국시간 기준으로 기록
+- chulNo 전용 점수표 로직 유지
+- 1~14번 외 조합 차단 유지
 
 ## GitHub 업로드
 

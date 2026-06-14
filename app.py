@@ -9,7 +9,20 @@ import random
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from collections import Counter
+
+KST = ZoneInfo("Asia/Seoul")
+
+def now_kst():
+    return datetime.now(KST)
+
+def today_kst():
+    return now_kst().strftime("%Y%m%d")
+
+def now_kst_str():
+    return now_kst().strftime("%Y-%m-%d %H:%M:%S")
+
 
 st.set_page_config(
     page_title="MARU KRA PC DASHBOARD",
@@ -354,135 +367,9 @@ def append_table(path, row):
     df.to_csv(path, index=False, encoding="utf-8-sig")
     return df
 
+
 def today():
-    return datetime.now().strftime("%Y-%m-%d")
-
-settings = load_settings()
-weights = load_local_json(WEIGHT_FILE, DEFAULT_WEIGHTS)
-save_json(WEIGHT_FILE, weights)
-
-st.title("🐎 MARU KRA AI — PC 대시보드")
-
-st.markdown("""
-<style>
-.block-container {
-    padding-top: 1.2rem;
-    padding-bottom: 2rem;
-    max-width: 1500px;
-}
-[data-testid="stMetricValue"] {
-    font-size: 1.6rem;
-}
-div[data-testid="stVerticalBlock"] {
-    gap: 0.65rem;
-}
-.stButton > button {
-    height: 2.5rem;
-}
-section[data-testid="stSidebar"] {
-    min-width: 360px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.caption("chulNo 전용 점수표 · 1~14번만 추천 허용 · enNo/hrNo/chaksun 차단")
-st.info("허브 실시간 구조: API 수집 → Google Sheets 허브 저장 → PC/모바일 불러오기 → 분석/추천/학습")
-
-st.sidebar.header("MARU KRA 저장형")
-
-st.sidebar.subheader("Google Sheets 연동 상태")
-
-st.sidebar.subheader("허브 실시간 동기화")
-auto_hub_sync = st.sidebar.checkbox("분석 후 허브 자동저장", value=True)
-hub_read_mode = st.sidebar.checkbox("허브 기록 불러오기", value=True)
-if sheets_enabled():
-    wb_test, wb_err = get_sheet_workbook()
-    if wb_test is not None:
-        st.sidebar.success("Google Sheets 연결됨")
-    else:
-        st.sidebar.warning(wb_err)
-else:
-    st.sidebar.info("Sheets 미설정: 로컬 저장만 사용")
-if any(secret_get(names, "") for names in SECRET_MAP.values()):
-    st.sidebar.success("Secrets 값 자동 불러옴")
-else:
-    st.sidebar.info("Secrets 미설정: 앱 입력값/저장값 사용")
-
-api_key = st.sidebar.text_input(
-    "공공데이터 API Key",
-    value=settings.get("api_key", "") if settings.get("save_api_key") else "",
-    type="password"
-)
-save_api_key = st.sidebar.checkbox("API Key도 저장", value=bool(settings.get("save_api_key", False)))
-
-st.sidebar.caption("기본 주소만 넣으면 serviceKey/pageNo/numOfRows/resultType까지만 자동으로 붙입니다. 날짜/경마장 변수는 API별 URL에 직접 포함하세요.")
-
-with st.sidebar.expander("API URL 입력 / Secrets 자동 채움", expanded=True):
-    race_url = st.text_area("1. 경주정보 API URL", value=settings.get("race_url",""), height=64)
-    entry_url = st.text_area("2. 출전 등록말 API URL", value=settings.get("entry_url",""), height=64)
-    horse_url = st.text_area("3. 경주마 상세정보 API URL", value=settings.get("horse_url",""), height=64)
-    body_url = st.text_area("4. 출전마 체중 API URL", value=settings.get("body_url",""), height=64)
-    gear_url = st.text_area("5. 장구/폐출혈 API URL", value=settings.get("gear_url",""), height=64)
-    rating_url = st.text_area("6. 레이팅 API URL", value=settings.get("rating_url",""), height=64)
-    odds_url = st.text_area("7. 매출/확정배당률 API URL", value=settings.get("odds_url",""), height=64)
-    today_odds_url = st.text_area("8. 시행당일 확정배당률 API URL", value=settings.get("today_odds_url",""), height=64)
-    result_detail_url = st.text_area("9. AI기반 경주결과상세 API URL", value=settings.get("result_detail_url",""), height=64)
-    race_record_url = st.text_area("10. 경주기록/요약성적표 API URL", value=settings.get("race_record_url",""), height=64)
-    start_exam_url = st.text_area("11. 출발심사 결과 API URL", value=settings.get("start_exam_url",""), height=64)
-    judge_url = st.text_area("12. 경주심판 정보 API URL", value=settings.get("judge_url",""), height=64)
-    jockey_change_url = st.text_area("13. 기수변경 API URL", value=settings.get("jockey_change_url",""), height=64)
-    weather_alert_url = st.text_area("14. 기상특보 API URL", value=settings.get("weather_alert_url",""), height=64)
-    corner_pace_url = st.text_area("15. 코너별 통과순위/주로빠르기 API URL", value=settings.get("corner_pace_url",""), height=64)
-    popularity_url = st.text_area("16. 경주마 인기투표 API URL", value=settings.get("popularity_url",""), height=64)
-    first_odds_url = st.text_area("17. 1착마 적중승식 배당 API URL", value=settings.get("first_odds_url",""), height=64)
-    second_odds_url = st.text_area("18. 2착마 적중승식 배당 API URL", value=settings.get("second_odds_url",""), height=64)
-    third_odds_url = st.text_area("19. 3착마 적중승식 배당 API URL", value=settings.get("third_odds_url",""), height=64)
-
-places = ["서울", "부산경남", "제주"]
-track_place = st.sidebar.selectbox(
-    "경마장",
-    places,
-    index=places.index(settings.get("track_place", "서울")) if settings.get("track_place", "서울") in places else 0
-)
-
-
-target_date = st.sidebar.text_input(
-    "분석 날짜",
-    value=settings.get("target_date", "") or datetime.now().strftime("%Y%m%d"),
-    help="예: 20260614"
-)
-target_rc_no = st.sidebar.number_input(
-    "분석 경주번호",
-    min_value=1,
-    max_value=20,
-    value=int(settings.get("target_rc_no", 6)),
-    step=1
-)
-strict_race_filter = st.sidebar.checkbox(
-    "선택 경주만 엄격 필터",
-    value=False,
-    help="데이터가 충분할 때만 켜세요. 켜면 rcDate/meet/rcNo가 정확히 맞는 행만 분석합니다."
-)
-
-auto_weather = st.sidebar.checkbox("날씨/바람 자동수집", True)
-manual_weather = st.sidebar.selectbox("날씨 보정", ["자동", "맑음", "흐림", "비", "눈"])
-manual_track = st.sidebar.selectbox("주로 보정", ["자동", "건조", "양호", "다습", "포화", "불량"])
-manual_sand = st.sidebar.selectbox("모래 보정", ["자동", "가벼움", "보통", "무거움"])
-manual_wind = st.sidebar.selectbox("바람 보정", ["자동", "없음", "뒷바람", "맞바람", "측풍"])
-distance_type = st.sidebar.selectbox("거리 성향", ["단거리", "중거리", "장거리"], index=1)
-
-st.sidebar.divider()
-sim_count = st.sidebar.selectbox("시뮬레이션 횟수", [100, 300, 500, 1000], index=1)
-risk_mode = st.sidebar.selectbox("위험 성향", ["안전형", "균형형", "공격형"])
-bankroll = st.sidebar.number_input("운영잔고", min_value=0, max_value=10000000, value=int(settings.get("bankroll",100000)), step=10000)
-unit_bet = st.sidebar.number_input("20만원 전 1회 기준금액", min_value=100, max_value=10000, value=int(settings.get("unit_bet",1000)), step=100)
-daily_loss_limit = st.sidebar.number_input("하루 손실 투자금지", min_value=10000, max_value=300000, value=int(settings.get("daily_loss_limit",30000)), step=1000)
-profit_unlock = st.sidebar.number_input("3만원 운영 허용 기준", min_value=50000, max_value=1000000, value=int(settings.get("profit_unlock",200000)), step=10000)
-daily_budget = st.sidebar.number_input("허용 후 하루 투자한도", min_value=10000, max_value=100000, value=int(settings.get("daily_budget",30000)), step=1000)
-daily_entries_limit = st.sidebar.number_input("하루 최대 진입", min_value=1, max_value=10, value=int(settings.get("daily_entries_limit",3)))
-auto_save_reco = st.sidebar.checkbox("추천 자동저장", True)
-use_sample = st.sidebar.checkbox("데이터 없으면 샘플 사용", True)
-kra_url = st.sidebar.text_input("KRA 공식 바로가기", value=settings.get("kra_url","https://m.kra.co.kr/main.do"))
+    return today_kst()
 
 def current_setting_payload():
     return {
@@ -550,7 +437,7 @@ def build_api_url(url):
         return ""
 
     key = str(api_key or "").strip()
-    ymd = datetime.now().strftime("%Y%m%d")
+    ymd = today_kst()
 
     url = url.replace("{serviceKey}", key)
     url = url.replace("{today}", ymd)
@@ -712,7 +599,7 @@ def soft_filter_one_api(df, key="api"):
     d = df.copy()
     original = d.copy()
 
-    desired_date = str(target_date or datetime.now().strftime("%Y%m%d")).replace("-", "").strip()
+    desired_date = str(target_date or today_kst()).replace("-", "").strip()
     desired_meet = normalize_meet_value(track_place)
     desired_rc = int(target_rc_no)
 
@@ -1128,7 +1015,7 @@ def hub_sync_now(data, score_df, result):
     if not sheets_enabled():
         return False, "Google Sheets 미설정"
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_kst_str()
     d = safe_target_date()
     rc = safe_target_rc()
     try:
@@ -1607,7 +1494,7 @@ def is_valid_combo_text(x):
 
 if auto_save_reco and result and result.get("공격삼쌍승","-") != "-" and valid_combo_only(result.get("공격삼쌍승","")) and current_race_ready(result) and is_valid_combo_text(result.get("공격삼쌍승","")) and int(result.get("신뢰도",0)) > 0:
     append_table(RECO_FILE, {
-        "저장시각":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "저장시각":now_kst_str(),
         "날짜":target_date if "target_date" in globals() else today(),
         **result,
         "날씨":env.get("weather",""),
@@ -1726,7 +1613,7 @@ with st.expander("결과 입력 / 예상비교 / 자가학습"):
         else:
             typ = "미적중"
         rec = {
-            "저장시각":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "저장시각":now_kst_str(),
             "날짜":today(),
             **result,
             "투입금":bet_amount,
