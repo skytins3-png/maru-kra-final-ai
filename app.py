@@ -55,6 +55,19 @@ API_LABELS = [
     ("third_odds_url", "3착마 적중승식"),
 ]
 
+# KRA 공식/마권구매 바로가기
+# 자동구매가 아니라 공식 화면으로 이동만 합니다.
+KRA_BUY_URLS = {
+    "서울": "https://m.kra.co.kr",
+    "부산경남": "https://m.kra.co.kr",
+    "제주": "https://m.kra.co.kr",
+}
+
+def kra_buy_url(meet="서울"):
+    # KRA 모바일 공식 페이지로 이동. 실제 구매/로그인은 KRA 공식 절차에서 진행됩니다.
+    return KRA_BUY_URLS.get(str(meet), "https://m.kra.co.kr")
+
+
 def now_kst():
     return datetime.now(KST)
 
@@ -975,6 +988,7 @@ def render():
                 st.caption(f"{label}: {get_url(k)}")
         st.divider()
         st.caption("Google Sheet 허브는 Secrets의 SHEET_ID/SERVICE_ACCOUNT_JSON이 있으면 사용됩니다.")
+        st.link_button("KRA 공식 바로가기", kra_buy_url(meet), use_container_width=True)
 
     rc_date = str(target_date).replace("-","").strip() or today_kst()
 
@@ -1051,6 +1065,8 @@ def render():
 </div>
 """, unsafe_allow_html=True)
             st.caption("경마 결과는 보장되지 않습니다. 실구매는 본인 판단과 책임, 소액 원칙으로만 진행하세요.")
+            st.link_button("↗ KRA 공식 마권구매 홈페이지 바로가기", kra_buy_url(meet), use_container_width=True)
+            st.caption("※ 자동구매 아님 · KRA 공식 화면으로 이동 · 로그인/구매는 본인 직접 진행")
 
             if st.button("현재 분석 허브 저장", type="primary"):
                 row = {
