@@ -7,7 +7,48 @@ import itertools
 import re
 import requests
 
+
+API_DEFAULT_URLS = {
+    "race_url": "https://apis.data.go.kr/B551015/API186_1/SeoulRace_1",
+    "entry_url": "https://apis.data.go.kr/B551015/API23_1/entryRaceHorse_1",
+    "horse_url": "https://apis.data.go.kr/B551015/API310/raceHorseInfo",
+    "body_url": "https://apis.data.go.kr/B551015/API25_1/raceHorseBody",
+    "gear_url": "https://apis.data.go.kr/B551015/API24_1/raceHorseGear",
+    "rating_url": "https://apis.data.go.kr/B551015/API77/raceHorseRating",
+    "odds_url": "https://apis.data.go.kr/B551015/API28_1/Dividend_rate",
+    "today_odds_url": "https://apis.data.go.kr/B551015/API301/Dividend_rate_total",
+}
+
+def api_secret_value(key, default=""):
+    try:
+        if "maru" in st.secrets:
+            if key in st.secrets["maru"]:
+                return st.secrets["maru"][key]
+            if key.upper() in st.secrets["maru"]:
+                return st.secrets["maru"][key.upper()]
+    except Exception:
+        pass
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+        if key.upper() in st.secrets:
+            return st.secrets[key.upper()]
+    except Exception:
+        pass
+    try:
+        if key in API_DEFAULT_URLS:
+            return API_DEFAULT_URLS[key]
+    except Exception:
+        pass
+    return default
+
 st.set_page_config(page_title="MARU KRA 안정 부팅 복구", page_icon="🐎", layout="wide", initial_sidebar_state="expanded")
+
+try:
+    if "saved_count" not in st.session_state:
+        st.session_state["saved_count"] = 0
+except Exception:
+    pass
 
 st.markdown("""
 <style>
@@ -2309,6 +2350,20 @@ def factor_table(records, result):
 st.sidebar.title("설정")
 
 st.sidebar.success("안정 롤백판: 텔레그램/Google Sheet/감시모드 메뉴 복구")
+
+st.sidebar.divider()
+st.sidebar.subheader("API 입력/자동값")
+api_key = st.sidebar.text_input("공공데이터 API Key", value=str(api_secret_value("api_key", api_secret_value("API_KEY", ""))), type="password")
+race_url = st.sidebar.text_input("1. 경주정보 URL", value=str(api_secret_value("race_url")))
+entry_url = st.sidebar.text_input("2. 출전등록말 URL", value=str(api_secret_value("entry_url")))
+horse_url = st.sidebar.text_input("3. 경주마정보 URL", value=str(api_secret_value("horse_url")))
+body_url = st.sidebar.text_input("4. 출전마 체중 URL", value=str(api_secret_value("body_url")))
+gear_url = st.sidebar.text_input("5. 장구/폐출혈 URL", value=str(api_secret_value("gear_url")))
+rating_url = st.sidebar.text_input("6. 레이팅 URL", value=str(api_secret_value("rating_url")))
+odds_url = st.sidebar.text_input("7. 배당/매출 URL", value=str(api_secret_value("odds_url")))
+today_odds_url = st.sidebar.text_input("8. 시행당일 배당 URL", value=str(api_secret_value("today_odds_url")))
+st.sidebar.caption("URL은 기본값 자동 입력 / API Key는 Secrets 권장")
+
 st.sidebar.caption("이번 버전은 꼬인 API 강제입력판을 중단하고, 기존 안정 UI로 되돌린 버전입니다.")
 
 mobile_fast_mode = st.sidebar.checkbox("📱 모바일 빠른모드", value=True)
@@ -2504,6 +2559,12 @@ st.markdown(f"""
 <div class="big">🧬 AI 진화 학습 상태</div>
 <div style="font-size:18px;line-height:1.8;">
 진화점수: <b>{evo_score}/100</b><br>
+
+# 자동 관찰/저장 카운트 기본값 보강
+saved_count = globals().get("saved_count", 0)
+today_saved_count = globals().get("today_saved_count", 0)
+auto_watch_count = globals().get("auto_watch_count", 0)
+
 오늘 자동 관찰 저장: <b>{saved_count}건</b><br>
 실제 구매 제한: <b>하루 {daily_buy_limit}회</b> / 오늘 구매 저장: <b>{st.session_state.daily_purchase_count}회</b><br>
 구매하지 않은 후보도 관찰 데이터로 저장되어 나중에 통계자료로 사용됩니다.<br>
