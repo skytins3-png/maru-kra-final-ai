@@ -1,3276 +1,2169 @@
 
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
-import numpy as np
-import itertools
-import re
 import requests
+import json
+import hashlib
+import traceback
+import random
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from collections import Counter
 
-st.set_page_config(page_title="MARU KRA 안정 롤백", page_icon="🐎", layout="wide", initial_sidebar_state="expanded")
+KST = ZoneInfo("Asia/Seoul")
 
-st.markdown("""
-<style>
-.stApp { background:#0b0b0b; color:#eee; }
-.block-container { max-width:1320px; padding-top:.7rem; }
-section[data-testid="stSidebar"] { background:#f3f4f8; color:#222; }
-.title-card { border:1px solid #444; background:#151515; padding:15px; color:#fff; font-size:27px; font-weight:900; border-radius:15px; }
-.sub-card { border:1px solid #444; background:#151515; padding:10px; color:#ddd; font-size:15px; font-weight:800; border-radius:12px; margin-bottom:12px; }
-.alert-card { border:3px solid #ff3333; background:#2a0e0e; padding:18px; border-radius:18px; margin:12px 0; }
-.best-card { border:3px solid #ff7a18; background:#241306; padding:18px; border-radius:18px; margin:12px 0; }
-.source-card { border:2px solid #1677ff; background:#0e1726; padding:15px; border-radius:16px; margin:12px 0; }
-.big { font-size:34px; font-weight:900; color:#ffb020; line-height:1.3; }
-.alert-big { font-size:34px; font-weight:900; color:#ff5555; line-height:1.3; }
-a.buy-link { display:block; text-align:center; background:#ffcc00; color:#111; padding:18px; border-radius:15px; font-size:24px; font-weight:900; text-decoration:none; margin:12px 0; }
-.good { color:#31d158; font-weight:900; }
-.bad { color:#ff5555; font-weight:900; }
-.warn { color:#ffd84d; font-weight:900; }
-@media (max-width:700px){ .title-card{font-size:24px}.big,.alert-big{font-size:28px}.best-card,.alert-card{padding:14px} }
+def now_kst():
+    return datetime.now(KST)
 
-.super-alert {
-  border: 4px solid #ff0000;
-  background: linear-gradient(90deg, #290000, #5a0000, #290000);
-  padding: 22px;
-  border-radius: 20px;
-  margin: 16px 0;
-  animation: superFlash 0.75s infinite alternate;
-  box-shadow: 0 0 24px rgba(255,0,0,.85);
-}
-.super-alert-title {
-  font-size: 40px;
-  font-weight: 1000;
-  color: #fff200;
-  line-height: 1.25;
-}
-.super-alert-body {
-  font-size: 20px;
-  color: #ffffff;
-  line-height: 1.7;
-  font-weight: 800;
-}
-.sms-alert {
-  border: 3px solid #00ff90;
-  background: #001f12;
-  padding: 18px;
-  border-radius: 18px;
-  margin: 14px 0;
-  box-shadow: 0 0 18px rgba(0,255,144,.55);
-  color: #eafff4;
-  font-family: monospace;
-  white-space: pre-wrap;
-  font-size: 17px;
-}
-@keyframes superFlash {
-  from { filter: brightness(1); transform: scale(1); }
-  to { filter: brightness(1.55); transform: scale(1.01); }
-}
+def today_kst():
+    return now_kst().strftime("%Y%m%d")
+
+def now_kst_str():
+    return now_kst().strftime("%Y-%m-%d %H:%M:%S")
 
 
-.watch-on {
-  border: 3px solid #00ff90;
-  background: #001d12;
-  color: #eafff4;
-  padding: 18px;
-  border-radius: 18px;
-  margin: 14px 0;
-  box-shadow: 0 0 18px rgba(0,255,144,.45);
-}
-.watch-off {
-  border: 3px solid #777;
-  background: #181818;
-  color: #ddd;
-  padding: 18px;
-  border-radius: 18px;
-  margin: 14px 0;
-}
-.watch-title {
-  font-size: 30px;
-  font-weight: 1000;
+
+# API URL 기본값: 재배포해도 다시 입력하지 않기 위한 내장값
+FORCE_DEFAULT_URLS = {
+    "race_url": "https://apis.data.go.kr/B551015/API186_1/SeoulRace_1",
+    "entry_url": "https://apis.data.go.kr/B551015/API23_1/entryRaceHorse_1",
+    "horse_url": "https://apis.data.go.kr/B551015/API310/raceHorseInfo",
+    "body_url": "https://apis.data.go.kr/B551015/API25_1/raceHorseBody",
+    "gear_url": "https://apis.data.go.kr/B551015/API24_1/raceHorseGear",
+    "rating_url": "https://apis.data.go.kr/B551015/API77/raceHorseRating",
+    "odds_url": "https://apis.data.go.kr/B551015/API28_1/Dividend_rate",
+    "today_odds_url": "https://apis.data.go.kr/B551015/API301/Dividend_rate_total",
+    "result_detail_url": "https://apis.data.go.kr/B551015/API299_1/raceResultDetail_1",
+    "race_record_url": "https://apis.data.go.kr/B551015/API214_1/raceRecord_1",
+    "start_exam_url": "https://apis.data.go.kr/B551015/API76_1/startExamResult_1",
+    "judge_url": "https://apis.data.go.kr/B551015/API72_1/raceJudge_1",
+    "jockey_change_url": "https://apis.data.go.kr/B551015/API71_1/jockeyChange_1",
+    "weather_alert_url": "https://apis.data.go.kr/1360000/WthrWrnInfoService/getPwnStatus",
+    "corner_pace_url": "https://apis.data.go.kr/B551015/API303/corner_rank",
+    "popularity_url": "https://apis.data.go.kr/B551015/API302/popularity",
+    "first_odds_url": "https://apis.data.go.kr/B551015/API27_1/winPredictionRateInfo_1",
+    "second_odds_url": "https://apis.data.go.kr/B551015/API29_1/doublePredictionRateInfo_1",
+    "third_odds_url": "https://apis.data.go.kr/B551015/API30_1/triplePredictionRateInfo_1",
 }
 
+FORCE_API_KEYS = [
+    ("race_url", "1. 경주정보 URL"),
+    ("entry_url", "2. 출전등록말 URL"),
+    ("horse_url", "3. 경주마정보 URL"),
+    ("body_url", "4. 출전마 체중 URL"),
+    ("gear_url", "5. 장구/폐출혈 URL"),
+    ("rating_url", "6. 레이팅 URL"),
+    ("odds_url", "7. 배당/매출 URL"),
+    ("today_odds_url", "8. 시행당일 배당 URL"),
+    ("result_detail_url", "9. AI 경주결과상세 URL"),
+    ("race_record_url", "10. 경주기록 URL"),
+    ("start_exam_url", "11. 출발심사 URL"),
+    ("judge_url", "12. 경주심판 URL"),
+    ("jockey_change_url", "13. 기수변경 URL"),
+    ("weather_alert_url", "14. 기상특보 URL"),
+    ("corner_pace_url", "15. 코너/주로빠르기 URL"),
+    ("popularity_url", "16. 인기투표 URL"),
+    ("first_odds_url", "17. 1착마 적중승식 URL"),
+    ("second_odds_url", "18. 2착마 적중승식 URL"),
+    ("third_odds_url", "19. 3착마 적중승식 URL"),
+]
 
-.final-buy-card {
-  border: 4px solid #22c55e;
-  background: linear-gradient(135deg, #022c22, #064e3b);
-  color: #ecfdf5;
-  padding: 22px;
-  border-radius: 20px;
-  margin: 18px 0;
-  box-shadow: 0 0 22px rgba(34,197,94,.45);
-}
-.final-hold-card {
-  border: 4px solid #f59e0b;
-  background: linear-gradient(135deg, #451a03, #78350f);
-  color: #fffbeb;
-  padding: 22px;
-  border-radius: 20px;
-  margin: 18px 0;
-  box-shadow: 0 0 22px rgba(245,158,11,.45);
-}
-.final-stop-card {
-  border: 4px solid #ef4444;
-  background: linear-gradient(135deg, #450a0a, #7f1d1d);
-  color: #fef2f2;
-  padding: 22px;
-  border-radius: 20px;
-  margin: 18px 0;
-  box-shadow: 0 0 22px rgba(239,68,68,.45);
-}
-.final-title {
-  font-size: 34px;
-  font-weight: 1000;
-  margin-bottom: 12px;
-}
-.final-body {
-  font-size: 19px;
-  line-height: 1.75;
-  font-weight: 750;
-}
-.report-box {
-  border: 2px solid #38bdf8;
-  background: #082f49;
-  color: #e0f2fe;
-  padding: 18px;
-  border-radius: 18px;
-  margin: 14px 0;
-  line-height: 1.7;
-}
-
-
-.status-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
-  gap: 10px;
-  margin: 14px 0;
-}
-.status-ok {
-  border: 2px solid #22c55e;
-  background: #052e16;
-  color: #dcfce7;
-  padding: 14px;
-  border-radius: 16px;
-}
-.status-warn {
-  border: 2px solid #f59e0b;
-  background: #451a03;
-  color: #fffbeb;
-  padding: 14px;
-  border-radius: 16px;
-}
-.status-bad {
-  border: 2px solid #ef4444;
-  background: #450a0a;
-  color: #fee2e2;
-  padding: 14px;
-  border-radius: 16px;
-}
-.status-title {
-  font-size: 15px;
-  font-weight: 800;
-  opacity: .9;
-}
-.status-value {
-  font-size: 25px;
-  font-weight: 1000;
-}
-.ultra-home {
-  border: 4px solid #38bdf8;
-  background: linear-gradient(135deg, #082f49, #0f172a);
-  color: #e0f2fe;
-  padding: 22px;
-  border-radius: 22px;
-  margin: 16px 0;
-  box-shadow: 0 0 24px rgba(56,189,248,.40);
-}
-.ultra-home-title {
-  font-size: 36px;
-  font-weight: 1000;
-  margin-bottom: 10px;
-}
-.ultra-home-body {
-  font-size: 20px;
-  line-height: 1.75;
-  font-weight: 760;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-KRA_URLS = {
-    "서울경마공원": "https://race.kra.co.kr/",
-    "부산경남경마공원": "https://race.kra.co.kr/busanMain.do",
-    "제주경마공원": "https://race.kra.co.kr/jejuMain.do",
-}
-KRA_MENUS = {
-    "오늘의 경주": "https://race.kra.co.kr/todayrace/todayrace.do",
-    "출마표": "https://race.kra.co.kr/chulmainfo/chulmaInfoList.do",
-    "경주결과": "https://race.kra.co.kr/raceScore/scoretableScoreList.do",
-    "경주마 정보": "https://race.kra.co.kr/racehorse/profileHorseList.do",
-    "기수 정보": "https://race.kra.co.kr/racehorse/profileJockeyList.do",
-}
-
-COLUMNS = ["경주일","경마장","경주번호","출발시간","경주명","거리","등급","경주마","마번","줄","기수","이전기수","조교사","마주","주행습성","마령","부담중량","초기배당","현재배당","직전순위","지지난순위","순위","착차","초반위치","중반위치","4코너위치","결승위치","혈통점수","스피드점수","지구력점수","거리적성","컨디션점수","현재체중","평균체중","체중증감","출전간격일","최근5전","기수승률","마주승률","조교사승률","조교상태","선행가능성","마체상태","초반스피드","막판탄력","게이트안정","주로상태"]
-
-sample = pd.DataFrame([
-["2026-06-09","서울경마공원",1,"10:45","2세 신마전",1000,"신마","번개질주",1,"1째줄","김철수","김철수","박조교","박마주","선행",3,55,2.2,1.8,2,1,1,92,93,86,94,90,-1,14,"2-1-1-2-1",22,16,18,"상승","높음","양호",9,8,9,"건조"],
-["2026-06-09","서울경마공원",1,"10:45","2세 신마전",1000,"신마","태양왕",2,"2째줄","이영호","박기수","최조교","최마주","선입",4,56,7.5,5.1,1,3,3,78,84,72,79,78,2,21,"1-3-4-2-3",15,10,9,"보통","중간","보통",7,6,5,"양호"],
-["2026-06-09","서울경마공원",1,"10:45","2세 신마전",1000,"신마","백호질주",5,"5째줄","이영호","이영호","강조교","강마주","추입",5,55.5,10.8,8.9,1,2,2,88,79,91,89,87,-2,18,"3-2-2-1-1",21,16,15,"상승","중간","양호",8,9,7,"건조"],
-["2026-06-09","서울경마공원",1,"10:45","2세 신마전",1000,"신마","흑룡",4,"4째줄","최강준","낮은기수","이조교","이마주","선입",6,56.5,13.2,11.5,2,4,4,82,73,88,85,80,1,18,"5-4-3-2-2",12,11,10,"상승","낮음","보통",6,8,5,"다습"],
-["2026-06-09","서울경마공원",1,"10:45","2세 신마전",1000,"신마","한라질주",8,"8째줄","오한라","오한라","오조교","오마주","선행",4,54,14.0,9.6,2,2,5,81,87,77,82,81,1,20,"4-3-2-2-1",16,12,8,"상승","높음","양호",8,6,8,"건조"],
-["2026-06-09","서울경마공원",1,"10:45","2세 신마전",1000,"신마","청풍",9,"9째줄","신바람","신바람","문조교","문마주","자유",8,57.5,18.0,16.2,7,6,6,66,71,60,63,58,8,105,"7-8-6-6-5",6,4,5,"하락","낮음","불안",4,4,3,"다습"],
-["2026-06-09","서울경마공원",1,"10:45","2세 신마전",1000,"신마","숨은강자",6,"6째줄","한승부","한승부","최조교","최마주","선입",5,54.5,15.5,9.8,3,5,1,84,80,84,88,85,-3,16,"6-5-3-3-1",14,13,16,"상승","중간","양호",7,8,7,"건조"],
-["2026-06-09","서울경마공원",1,"10:45","2세 신마전",1000,"신마","막판왕",7,"7째줄","장거리","장거리","김조교","장마주","추입",7,55,12.5,8.2,4,6,2,85,76,94,91,86,-2,21,"7-6-4-2-1",13,12,14,"상승","낮음","양호",5,10,6,"건조"],
-["2026-06-09","서울경마공원",2,"11:15","국산 5등급",1300,"5등급","천둥",3,"3째줄","강기수","강기수","강조교","강마주","선행",3,55,3.8,3.1,2,3,1,86,88,80,87,84,-1,17,"4-3-2-2-1",17,13,15,"상승","높음","양호",8,7,8,"건조"],
-["2026-06-09","서울경마공원",2,"11:15","국산 5등급",1300,"5등급","불꽃",6,"6째줄","박기수","낮은기수","박조교","박마주","선입",4,56,9.0,7.4,4,5,2,82,80,86,85,82,-2,19,"6-5-4-3-2",13,12,13,"상승","중간","양호",7,8,7,"건조"],
-["2026-06-09","서울경마공원",2,"11:15","국산 5등급",1300,"5등급","바람검",10,"10째줄","오기수","오기수","오조교","오마주","추입",8,54,20.0,14.8,6,7,3,80,74,92,88,80,-3,20,"8-7-6-4-3",11,10,11,"상승","낮음","양호",5,10,5,"건조"],
-], columns=COLUMNS)
-sample["경주일"] = pd.to_datetime(sample["경주일"])
-
-if "df" not in st.session_state:
-    st.session_state.df = sample.copy()
-if "raw_tables" not in st.session_state:
-    st.session_state.raw_tables = []
-if "source_status" not in st.session_state:
-    st.session_state.source_status = "샘플 데이터 대기"
-if "watch_mode_on" not in st.session_state:
-    st.session_state.watch_mode_on = False
-if "watch_start_time" not in st.session_state:
-    st.session_state.watch_start_time = ""
-if "watch_stop_reason" not in st.session_state:
-    st.session_state.watch_stop_reason = ""
-
-if "auto_loaded" not in st.session_state:
-    st.session_state.auto_loaded = False
-if "auto_analysis_status" not in st.session_state:
-    st.session_state.auto_analysis_status = "자동 분석 대기"
-if "auto_load_log" not in st.session_state:
-    st.session_state.auto_load_log = ""
-if "alarm_on" not in st.session_state:
-    st.session_state.alarm_on = False
-if "review_records" not in st.session_state:
-    st.session_state.review_records = detailed_review_records_default()
-
-if "race_results" not in st.session_state:
-    st.session_state.race_results = pd.DataFrame(columns=[
-        "날짜","경마장","경주","경주번호","1착","2착","3착","최종배당_삼복승","최종배당_삼쌍승","기록","주로상태"
-    ])
-if "result_compare_log" not in st.session_state:
-    st.session_state.result_compare_log = pd.DataFrame(columns=[
-        "날짜","경마장","경주","방식","조합","예상배당","최종배당","판정","구매여부","예상환급","실제환급","메모"
-    ])
-if "auto_recommend_text_log" not in st.session_state:
-    st.session_state.auto_recommend_text_log = pd.DataFrame(columns=[
-        "날짜","경마장","경주번호","출발시간","추천문구","방식","조합","예상배당","조합점수","위험합계","신뢰등급","상태"
-    ])
-if "parsed_result_text_log" not in st.session_state:
-    st.session_state.parsed_result_text_log = pd.DataFrame(columns=[
-        "날짜","경마장","경주번호","1착","2착","3착","최종배당_삼복승","최종배당_삼쌍승","원문"
-    ])
-
-if "observation_records" not in st.session_state:
-    st.session_state.observation_records = pd.DataFrame(columns=[
-        "날짜","시간","경마장","경주","방식","조합","예상배당","조합점수","신뢰등급",
-        "운영판정","관찰결과","실제결과","구매여부","메모"
-    ])
-if "learning_memory" not in st.session_state:
-    st.session_state.learning_memory = pd.DataFrame(columns=[
-        "날짜","유형","요인","방향","가중치","근거","적용여부"
-    ])
-if "daily_purchase_count" not in st.session_state:
-    st.session_state.daily_purchase_count = 0
-if "daily_purchase_date" not in st.session_state:
-    st.session_state.daily_purchase_date = pd.Timestamp.today().strftime("%Y-%m-%d")
-
-if "records" not in st.session_state:
-    st.session_state.records = pd.DataFrame([
-        {"날짜":"2026-06-09","시간":"10:45","경마장":"서울","경주":"1R","발견":"30배 발견","결과":"적중","수익":290000,"방식":"삼복승","조합":"5-6-8","예상배당":34.2,"공통요인":"체중 안정|출전간격 안정|최근 순위 상승"},
-        {"날짜":"2026-06-09","시간":"11:15","경마장":"서울","경주":"2R","발견":"30배 발견","결과":"실패","수익":-10000,"방식":"삼쌍승","조합":"3-6-10","예상배당":31.8,"공통요인":"외곽게이트|정확순서 실패"},
-    ])
-
-def ensure(df):
-    d = df.copy()
-    for c in COLUMNS:
-        if c not in d.columns:
-            d[c] = np.nan
-    for c in ["경주번호","거리","마번","마령","부담중량","초기배당","현재배당","직전순위","지지난순위","순위","착차","초반위치","중반위치","4코너위치","결승위치","혈통점수","스피드점수","지구력점수","거리적성","컨디션점수","현재체중","평균체중","체중증감","출전간격일","기수승률","마주승률","조교사승률","초반스피드","막판탄력","게이트안정"]:
-        d[c] = pd.to_numeric(d[c], errors="coerce")
-    d["줄"] = d.apply(lambda r: r["줄"] if pd.notna(r["줄"]) and str(r["줄"]).strip() else (f"{int(r['마번'])}째줄" if pd.notna(r["마번"]) else ""), axis=1)
-    d["배당변화율"] = ((d["현재배당"] - d["초기배당"]) / d["초기배당"] * 100).round(1)
-    return d
-
-@st.cache_data(ttl=120)
-def fetch_kra_tables(url):
+def force_secret_or_setting(key, default=""):
     try:
-        res = requests.get(url, timeout=10, headers={"User-Agent":"Mozilla/5.0"})
-        res.raise_for_status()
-        return True, pd.read_html(res.text), ""
-    except Exception as e:
-        return False, [], str(e)
-
-def normalize_kra(t, course):
-    df = t.copy()
-    df.columns = [str(c).replace("\n"," ").strip() for c in df.columns]
-    def pick(keys):
-        for k in keys:
-            for c in df.columns:
-                if k in c:
-                    return c
-        return None
-    horse, num = pick(["마명","경주마","말명"]), pick(["마번","번호"])
-    if horse is None or num is None:
-        return None
-    out = pd.DataFrame()
-    out["경주일"] = pd.Timestamp.today().normalize()
-    out["경마장"] = course
-    out["경주번호"] = 1
-    out["출발시간"] = ""
-    out["경주명"] = "KRA 원본표"
-    out["거리"] = np.nan
-    out["등급"] = ""
-    out["경주마"] = df[horse].astype(str)
-    out["마번"] = pd.to_numeric(df[num].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
-    out["줄"] = out["마번"].apply(lambda x: f"{int(x)}째줄" if pd.notna(x) else "")
-    out["기수"] = df[pick(["기수"])].astype(str) if pick(["기수"]) else ""
-    out["이전기수"] = out["기수"]
-    out["조교사"] = df[pick(["조교사"])].astype(str) if pick(["조교사"]) else ""
-    out["마주"] = ""
-    out["주행습성"] = ""
-    out["마령"] = 4
-    out["부담중량"] = np.nan
-    out["초기배당"] = np.nan
-    out["현재배당"] = np.nan
-    out["직전순위"] = np.nan
-    out["지지난순위"] = np.nan
-    out["순위"] = np.nan
-    out["착차"] = np.nan
-    out["초반위치"] = np.nan
-    out["중반위치"] = np.nan
-    out["4코너위치"] = np.nan
-    out["결승위치"] = np.nan
-    out["혈통점수"] = 65
-    out["스피드점수"] = 65
-    out["지구력점수"] = 65
-    out["거리적성"] = 65
-    out["컨디션점수"] = 65
-    out["현재체중"] = 0
-    out["평균체중"] = 0
-    out["체중증감"] = 0
-    out["출전간격일"] = 18
-    out["최근5전"] = ""
-    out["기수승률"] = 10
-    out["마주승률"] = 10
-    out["조교사승률"] = 10
-    out["조교상태"] = "보통"
-    out["선행가능성"] = "중간"
-    out["마체상태"] = "보통"
-    out["초반스피드"] = 6
-    out["막판탄력"] = 6
-    out["게이트안정"] = 6
-    out["주로상태"] = "양호"
-    return out[COLUMNS]
-
-def vibrate():
-    components.html("""
-    <script>
-    try {
-      navigator.vibrate && navigator.vibrate([500,150,500,150,800]);
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = ctx.createOscillator(); const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.frequency.value = 880; gain.gain.value = 0.08;
-      osc.start(); setTimeout(()=>{osc.stop();ctx.close();}, 800);
-    } catch(e) {}
-    </script>
-    """, height=0)
-
-def recent5_score(text):
-    vals = [int(x) for x in re.findall(r"\d+", str(text))][-5:]
-    if not vals: return 55
-    score = 50
-    for v in vals:
-        score += 15 if v==1 else 10 if v==2 else 7 if v==3 else 2 if v<=5 else -5
-    if len(vals) >= 3 and vals[-1] < vals[-3]: score += 10
-    if len(vals) and vals[-1] <= 3: score += 8
-    return max(0, min(100, score))
-
-def weight_score(x):
-    try: d=abs(float(x))
-    except: return 70
-    return 90 if d<=3 else 65 if d<=7 else 35
-
-def layoff_score(x):
-    try: d=float(x)
-    except: return 65
-    return 90 if 14<=d<=42 else 65 if 43<=d<=90 else 35 if d>90 else 60
-
-def gate_distance_score(gate, dist):
-    try: g, d = int(gate), int(dist)
-    except: return 65
-    if d <= 1300: return 92 if g<=4 else 75 if g<=7 else 45
-    if d >= 1700: return 78 if g<=8 else 60
-    return 85 if g<=6 else 68 if g<=9 else 50
-
-def jockey_change_score(row):
-    rate = pd.to_numeric(row.get("기수승률",10), errors="coerce")
-    if pd.isna(rate): rate=10
-    prev, cur = str(row.get("이전기수","")).strip(), str(row.get("기수","")).strip()
-    if prev and cur and prev != "nan" and prev != cur:
-        return 88 if rate>=15 else 40 if rate<8 else 65
-    return min(90, max(45, rate*4))
-
-def confidence_grade(v):
-    try: v=float(v)
-    except: v=0
-    return "🟢 A등급 실전 가능" if v>=82 else "🟡 B등급 소액" if v>=74 else "🔴 C등급 관찰" if v>=66 else "⚫ D등급 보류"
-
-def risk_list(row):
-    risks=[]
-    if pd.notna(row["마번"]) and row["마번"]>=9: risks.append("외곽게이트")
-    if pd.notna(row["거리적성"]) and row["거리적성"]<78: risks.append("거리 적성 부족")
-    if pd.notna(row["체중증감"]) and abs(row["체중증감"])>=8: risks.append("체중 ±8kg 이상")
-    elif pd.notna(row["체중증감"]) and abs(row["체중증감"])>=4: risks.append("체중 변화 주의")
-    if pd.notna(row["출전간격일"]) and row["출전간격일"]>90: risks.append("3개월 이상 공백")
-    if pd.notna(row["기수승률"]) and row["기수승률"]<10: risks.append("기수 약함")
-    if str(row["마체상태"])!="양호": risks.append("마체 불안")
-    if str(row["조교상태"])=="하락": risks.append("조교 하락")
-    return risks
-
-
-def weather_track_score(row, weather_type="보통", sand_status="보통"):
-    score = 70
-    notes = []
-
-    style = str(row.get("주행습성", ""))
-    horse_no = pd.to_numeric(row.get("마번", 0), errors="coerce")
-    dist = pd.to_numeric(row.get("거리", 0), errors="coerce")
-    weight_delta = pd.to_numeric(row.get("체중증감", 0), errors="coerce")
-    stamina = pd.to_numeric(row.get("지구력점수", 60), errors="coerce")
-    speed = pd.to_numeric(row.get("스피드점수", 60), errors="coerce")
-    condition = pd.to_numeric(row.get("컨디션점수", 60), errors="coerce")
-    interval = pd.to_numeric(row.get("출전간격일", 18), errors="coerce")
-
-    if pd.isna(horse_no): horse_no = 0
-    if pd.isna(dist): dist = 0
-    if pd.isna(weight_delta): weight_delta = 0
-    if pd.isna(stamina): stamina = 60
-    if pd.isna(speed): speed = 60
-    if pd.isna(condition): condition = 60
-    if pd.isna(interval): interval = 18
-
-    # Weather
-    if weather_type == "비":
-        if style in ["선행", "선입"]:
-            score += 8
-            notes.append("비/젖은주로 선행·선입 가산")
-        if style == "추입":
-            score -= 7
-            notes.append("비/젖은주로 추입 감점")
-        if horse_no <= 4 and dist <= 1300:
-            score += 5
-            notes.append("단거리 안쪽 게이트 가산")
-        if stamina >= 85:
-            score += 4
-            notes.append("지구력형 가산")
-    elif weather_type == "무더움":
-        if abs(weight_delta) >= 4:
-            score -= 8
-            notes.append("무더위 체중변화 감점")
-        if interval < 14:
-            score -= 6
-            notes.append("무더위 짧은 출전간격 감점")
-        if stamina >= 85 and condition >= 80:
-            score += 8
-            notes.append("무더위 체력·컨디션 가산")
-    elif weather_type == "추움":
-        if speed < 75:
-            score -= 4
-            notes.append("추운날 초반스피드 부족 감점")
-        if condition >= 82:
-            score += 6
-            notes.append("추운날 컨디션 양호 가산")
-        if style == "선행" and speed >= 85:
-            score += 5
-            notes.append("추운날 빠른 선행 가산")
-
-    # Sand / track special status
-    if sand_status == "모래 새로교체":
-        # Historical track patterns less reliable; power/stamina get boosted.
-        score -= 4
-        notes.append("모래교체 기존기록 신뢰도 감점")
-        if stamina >= 85:
-            score += 8
-            notes.append("새 모래 파워·지구력형 가산")
-        if speed >= 88 and style == "선행":
-            score += 4
-            notes.append("새 모래 초반 자리잡기 가산")
-    elif sand_status == "모래 깊음":
-        if stamina >= 85:
-            score += 8
-            notes.append("깊은 모래 지구력 가산")
-        if speed < 75:
-            score -= 5
-            notes.append("깊은 모래 추진력 부족 감점")
-    elif sand_status == "모래 가벼움":
-        if speed >= 85:
-            score += 8
-            notes.append("가벼운 모래 스피드형 가산")
-        if style == "추입":
-            score += 3
-            notes.append("가벼운 모래 막판탄력 가능")
-    elif sand_status == "안쪽 무거움":
-        if horse_no <= 4:
-            score -= 8
-            notes.append("안쪽 무거움 안쪽마 감점")
-        elif horse_no >= 6:
-            score += 4
-            notes.append("안쪽 무거움 바깥 전개 가산")
-    elif sand_status == "바깥쪽 무거움":
-        if horse_no >= 8:
-            score -= 8
-            notes.append("바깥쪽 무거움 외곽마 감점")
-        elif horse_no <= 5:
-            score += 4
-            notes.append("바깥쪽 무거움 안쪽 전개 가산")
-
-    return max(0, min(100, score)), " / ".join(notes) if notes else "특수보정 없음"
-
-
-def age_score(age, dist):
-    try:
-        a = float(age)
-        d = float(dist)
+        if key in st.session_state and st.session_state[key]:
+            return st.session_state[key]
     except Exception:
-        return 70
-    if 3 <= a <= 5:
-        return 90
-    if 6 <= a <= 7:
-        return 75 if d < 1700 else 70
-    if a >= 8:
-        return 55 if d < 1700 else 42
-    return 65
+        pass
+    try:
+        if "settings" in globals() and isinstance(settings, dict):
+            if settings.get(key):
+                return settings.get(key)
+            if settings.get(key.upper()):
+                return settings.get(key.upper())
+    except Exception:
+        pass
+    try:
+        if "maru" in st.secrets:
+            if key in st.secrets["maru"]:
+                return st.secrets["maru"][key]
+            if key.upper() in st.secrets["maru"]:
+                return st.secrets["maru"][key.upper()]
+    except Exception:
+        pass
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+        if key.upper() in st.secrets:
+            return st.secrets[key.upper()]
+    except Exception:
+        pass
+    try:
+        if key in FORCE_DEFAULT_URLS:
+            return FORCE_DEFAULT_URLS[key]
+    except Exception:
+        pass
+    return default
 
-def pace_prediction_for_race(g):
-    styles = g["주행습성"].astype(str)
-    lead_count = int(styles.isin(["선행"]).sum())
-    front_count = int(styles.isin(["선행","선입"]).sum())
-    if lead_count >= 5:
-        pace = "초반 과열"
-        adv = "추입마 유리"
-        note = "선행형 5두 이상 → 앞선 경쟁 심함"
-    elif lead_count <= 1:
-        pace = "느린 페이스"
-        adv = "선행마 유리"
-        note = "선행형 1~2두 → 앞에서 편하게 갈 가능성"
+
+def force_save_settings(payload):
+    try:
+        Path("maru_settings.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+st.set_page_config(page_title="MARU KRA FORCE SIDEBAR", layout="wide", initial_sidebar_state="expanded")
+
+# ===== 강제 사이드바 복구 영역 =====
+st.sidebar.title("🐎 MARU KRA 메뉴")
+st.sidebar.caption("사이드바 강제 복구판")
+st.sidebar.success("API URL은 기본값 자동 입력 / API Key는 Secrets에서 자동 불러오기")
+
+api_key = st.sidebar.text_input(
+    "공공데이터 API Key",
+    value=str(force_secret_or_setting("api_key", force_secret_or_setting("API_KEY", ""))),
+    type="password"
+)
+st.session_state["api_key"] = api_key
+
+st.sidebar.divider()
+st.sidebar.subheader("분석 기준")
+target_date = st.sidebar.text_input("분석 날짜", value=str(force_secret_or_setting("target_date", today() if "today" in globals() else "")))
+track_place = st.sidebar.selectbox("경마장", ["서울", "부산경남", "제주"], index=["서울", "부산경남", "제주"].index(str(force_secret_or_setting("track_place", "서울"))) if str(force_secret_or_setting("track_place", "서울")) in ["서울", "부산경남", "제주"] else 0)
+target_rc_no = st.sidebar.number_input("경주번호", min_value=1, max_value=20, value=int(force_secret_or_setting("target_rc_no", 1) or 1), step=1)
+strict_race_filter = st.sidebar.checkbox("선택 경주만 엄격 필터", value=False)
+
+
+with st.sidebar.expander("Secrets 1회 설정 예시", expanded=False):
+    st.code("""
+[maru]
+API_KEY = "공공데이터_API_KEY"
+
+# URL은 앱 기본값을 쓰면 입력 안 해도 됩니다.
+# 필요할 때만 아래처럼 덮어쓰기 가능합니다.
+# RACE_URL = "https://apis.data.go.kr/B551015/API186_1/SeoulRace_1"
+# ENTRY_URL = "https://apis.data.go.kr/B551015/API23_1/entryRaceHorse_1"
+""", language="toml")
+
+st.sidebar.divider()
+st.sidebar.subheader("핵심 API 주소")
+for _key, _label in FORCE_API_KEYS[:8]:
+    globals()[_key] = st.sidebar.text_input(_label, value=str(force_secret_or_setting(_key, "")))
+    st.session_state[_key] = globals()[_key]
+
+with st.sidebar.expander("보조 API 주소 9~19번", expanded=False):
+    for _key, _label in FORCE_API_KEYS[8:]:
+        globals()[_key] = st.text_input(_label, value=str(force_secret_or_setting(_key, "")))
+        st.session_state[_key] = globals()[_key]
+
+st.sidebar.divider()
+use_sample = st.sidebar.checkbox("샘플 데이터 사용", value=False)
+st.session_state["use_sample"] = use_sample
+
+st.sidebar.divider()
+st.sidebar.subheader("환경/날씨 설정")
+auto_weather = st.sidebar.checkbox("날씨 자동수집", value=True)
+manual_weather = st.sidebar.selectbox("날씨", ["맑음", "흐림", "비", "눈", "안개"], index=1)
+manual_track = st.sidebar.selectbox("주로", ["양호", "건조", "다습", "포화", "불량"], index=0)
+manual_sand = st.sidebar.selectbox("모래", ["빠름", "보통", "무거움"], index=1)
+manual_wind = st.sidebar.selectbox("바람", ["약함", "보통", "강함"], index=1)
+st.session_state["auto_weather"] = auto_weather
+st.session_state["manual_weather"] = manual_weather
+st.session_state["manual_track"] = manual_track
+st.session_state["manual_sand"] = manual_sand
+st.session_state["manual_wind"] = manual_wind
+
+st.sidebar.divider()
+st.sidebar.subheader("거리/경주 분석 설정")
+distance_type = st.sidebar.selectbox("거리 유형", ["단거리", "중거리", "장거리"], index=1)
+race_distance = st.sidebar.number_input("경주 거리(m)", min_value=800, max_value=3200, value=1200, step=100)
+pace_type = st.sidebar.selectbox("전개 예상", ["빠름", "보통", "느림"], index=1)
+track_bias = st.sidebar.selectbox("주로 편향", ["없음", "안쪽 유리", "바깥 유리", "선행 유리", "추입 유리"], index=0)
+st.session_state["distance_type"] = distance_type
+st.session_state["race_distance"] = race_distance
+st.session_state["pace_type"] = pace_type
+st.session_state["track_bias"] = track_bias
+
+st.sidebar.divider()
+st.sidebar.subheader("자금/저장 설정")
+daily_loss_stop = st.sidebar.number_input("하루 손실 제한", min_value=0, max_value=1000000, value=30000, step=1000)
+daily_entries_limit = st.sidebar.number_input("오늘 진입 제한", min_value=0, max_value=20, value=3, step=1)
+auto_save_reco = st.sidebar.checkbox("추천 자동 저장", value=True)
+st.session_state["daily_loss_stop"] = daily_loss_stop
+st.session_state["daily_entries_limit"] = daily_entries_limit
+st.session_state["auto_save_reco"] = auto_save_reco
+
+
+
+
+_force_payload = {"api_key": api_key, "target_date": target_date, "track_place": track_place, "target_rc_no": int(target_rc_no), "distance_type": distance_type, "race_distance": int(race_distance), "pace_type": pace_type, "track_bias": track_bias}
+for _key, _label in FORCE_API_KEYS:
+    _force_payload[_key] = globals().get(_key, "")
+
+if st.sidebar.button("API 저장", use_container_width=True):
+    if force_save_settings(_force_payload):
+        st.sidebar.success("API 설정 저장 완료")
     else:
-        pace = "보통 페이스"
-        adv = "선입/능력마 유리"
-        note = "선행·선입 균형"
-    return pace, adv, note, lead_count, front_count
+        st.sidebar.error("저장 실패")
 
-def odds_surge_score(row):
-    try:
-        open_o = float(row.get("초기배당", 0))
-        cur_o = float(row.get("현재배당", 0))
-    except Exception:
-        return 65, "배당정보 부족"
-    if open_o <= 0 or cur_o <= 0:
-        return 65, "배당정보 부족"
-    chg = (cur_o - open_o) / open_o * 100
-    if chg <= -30:
-        return 88, "인기 급상승 - 내부 정보/시장 관심 가능"
-    if chg >= 45:
-        return 38, "인기 급하락 - 컨디션 이상 가능"
-    if chg >= 25:
-        return 52, "인기 하락 주의"
-    if chg <= -15:
-        return 78, "배당 하락 관심 유입"
-    return 65, "배당 안정"
-
-def course_key(row):
-    try:
-        return f"{row.get('경마장','')}-{int(row.get('거리',0))}m"
-    except Exception:
-        return f"{row.get('경마장','')}-{row.get('거리','')}m"
-
-def failed_blacklist_score(row, records):
-    if records is None or len(records) == 0:
-        return 70, "블랙리스트 없음"
-    recent_fail = records[records["결과"].astype(str) == "실패"].tail(100)
-    fail_text = " ".join(recent_fail.astype(str).agg(" ".join, axis=1).tolist())
-    penalties = []
-    score = 80
-    if "외곽" in fail_text and pd.to_numeric(row.get("마번",0), errors="coerce") >= 9:
-        score -= 18
-        penalties.append("실패패턴: 외곽게이트")
-    if "비" in fail_text and str(row.get("주로상태","")) in ["다습","불량"]:
-        score -= 10
-        penalties.append("실패패턴: 비/젖은주로")
-    if "기수" in fail_text and pd.to_numeric(row.get("기수승률",10), errors="coerce") < 10:
-        score -= 12
-        penalties.append("실패패턴: 기수 약함")
-    if "장거리" in fail_text and pd.to_numeric(row.get("거리",0), errors="coerce") >= 1700 and pd.to_numeric(row.get("거리적성",60), errors="coerce") < 78:
-        score -= 15
-        penalties.append("실패패턴: 장거리 약함")
-    if "체중" in fail_text and abs(pd.to_numeric(row.get("체중증감",0), errors="coerce")) >= 4:
-        score -= 12
-        penalties.append("실패패턴: 체중 변화")
-    return max(20, min(100, score)), " / ".join(penalties) if penalties else "실패패턴 감점 없음"
-
-def course_stats(df):
-    d = ensure(df)
-    if len(d) == 0:
-        return pd.DataFrame()
-    d["코스"] = d.apply(course_key, axis=1)
-    out = d.groupby("코스").agg(
-        출전수=("코스","count"),
-        평균배당=("현재배당","mean"),
-        평균순위=("순위","mean"),
-        우승수=("순위", lambda x: int((pd.to_numeric(x, errors="coerce")==1).sum())),
-        평균게이트=("마번","mean"),
-        평균거리적성=("거리적성","mean")
-    ).reset_index()
-    out["코스승률"] = (out["우승수"] / out["출전수"] * 100).round(1)
-    return out.sort_values("코스", ascending=True)
-
-def self_learning_summary(records):
-    if records is None or len(records) == 0:
-        return pd.DataFrame(columns=["구분","건수","수익합계"])
-    r = records.tail(100).copy()
-    r["수익"] = pd.to_numeric(r["수익"], errors="coerce").fillna(0)
-    out = r.groupby("결과")["수익"].agg(["count","sum"]).reset_index()
-    out.columns = ["구분","건수","수익합계"]
-    return out
-
-def horse_engine(df, records):
-    h = ensure(df)
-    h["인기순위"] = h.groupby(["경마장","경주번호"])["현재배당"].transform(lambda s: pd.to_numeric(s, errors="coerce").rank(method="min", ascending=True).fillna(99)).astype(int)
-    h["인기유형"] = h["인기순위"].apply(lambda x: "인기마" if x<=3 else "중배당" if x<=7 else "복병")
-    h["최근5경기흐름"] = h["최근5전"].apply(recent5_score)
-    h["체중변화점수"] = h["체중증감"].apply(weight_score)
-    h["출전간격점수"] = h["출전간격일"].apply(layoff_score)
-    h["기수교체점수"] = h.apply(jockey_change_score, axis=1)
-    h["거리전환점수"] = h["거리적성"].fillna(60).clip(0,100)
-    h["게이트거리점수"] = h.apply(lambda r: gate_distance_score(r["마번"], r["거리"]), axis=1)
-    h["주로상태점수"] = h["주로상태"].apply(lambda x: {"건조":82,"양호":78,"다습":65,"불량":45}.get(str(x),65))
-    wt = h.apply(lambda r: weather_track_score(r, weather_type, sand_status), axis=1)
-    h["날씨주로특수점수"] = [x[0] for x in wt]
-    h["날씨주로메모"] = [x[1] for x in wt]
-    h["ROI보정점수"] = 70
-    h["배당가치"] = h["현재배당"].apply(lambda x: 95 if pd.notna(x) and 6<=x<=15 else 78 if pd.notna(x) and 3<=x<6 else 65 if pd.notna(x) and 15<x<=22 else 35)
-    h["마령점수"] = h.apply(lambda r: age_score(r.get("마령",4), r.get("거리",0)), axis=1)
-    odds_calc = h.apply(odds_surge_score, axis=1)
-    h["배당급변점수"] = [x[0] for x in odds_calc]
-    h["배당급변메모"] = [x[1] for x in odds_calc]
-    bl_calc = h.apply(lambda r: failed_blacklist_score(r, records), axis=1)
-    h["실패블랙점수"] = [x[0] for x in bl_calc]
-    h["실패블랙메모"] = [x[1] for x in bl_calc]
-    pace_rows = []
-    for (cc, rr), gg in h.groupby(["경마장","경주번호"]):
-        pace, adv, note, lead_cnt, front_cnt = pace_prediction_for_race(gg)
-        for idx in gg.index:
-            pace_rows.append((idx, pace, adv, note, lead_cnt, front_cnt))
-    pace_df = pd.DataFrame(pace_rows, columns=["idx","페이스예상","페이스유리","페이스메모","선행마수","선행선입수"]).set_index("idx")
-    h = h.join(pace_df)
-    h["페이스점수"] = h.apply(lambda r:
-        88 if (r["페이스유리"] == "선행마 유리" and str(r["주행습성"]) == "선행") else
-        86 if (r["페이스유리"] == "추입마 유리" and str(r["주행습성"]) == "추입") else
-        78 if (r["페이스유리"] == "선입/능력마 유리" and str(r["주행습성"]) in ["선입","선행"]) else
-        62, axis=1)
-
-    h["인기마제거점수"] = h["인기순위"].apply(lambda x: 45 if x<=3 else 85 if x<=8 else 75)
-    h["위험요인"] = h.apply(lambda r: " / ".join(risk_list(r)) if risk_list(r) else "큰 위험요인 적음", axis=1)
-    h["위험개수"] = h.apply(lambda r: len(risk_list(r)), axis=1)
-
-    h["핵심점수"] = (
-        h["혈통점수"].fillna(60)*.08 + h["스피드점수"].fillna(60)*.10 + h["지구력점수"].fillna(60)*.10 +
-        h["컨디션점수"].fillna(60)*.10 + h["최근5경기흐름"]*.14 + h["배당가치"]*.08 +
-        h["출전간격점수"]*.08 + h["게이트거리점수"]*.06 + h["인기마제거점수"]*.05 +
-        h["페이스점수"]*.08 + h["마령점수"]*.05 + h["배당급변점수"]*.04 + h["실패블랙점수"]*.04 - h["위험개수"]*3
-    ).round(1).clip(0,100)
-
-    h["최종실전점수"] = (
-        h["핵심점수"]*.55 + h["기수교체점수"]*.10 + h["거리전환점수"]*.10 + h["체중변화점수"]*.05 +
-        h["주로상태점수"]*.05 + h["날씨주로특수점수"]*.07 + h["ROI보정점수"]*.04 + h["최근5경기흐름"]*.04
-    ).round(1).clip(0,100)
-    h["최종판정"] = h["최종실전점수"].apply(confidence_grade)
-
-    h["1착점수"] = (h["최종실전점수"]*.55 + h["최근5경기흐름"]*.20 + h["게이트거리점수"]*.15 + h["기수교체점수"]*.10 - h["위험개수"]*3).round(1).clip(0,100)
-    h["2착점수"] = (h["최종실전점수"]*.45 + h["지구력점수"].fillna(60)*.20 + h["체중변화점수"]*.15 + h["배당가치"]*.20 - h["위험개수"]*2).round(1).clip(0,100)
-    h["3착점수"] = (h["최종실전점수"]*.32 + h["배당가치"]*.30 + h["막판탄력"].fillna(5)*10*.20 + h["거리전환점수"]*.18 - h["위험개수"]*2).round(1).clip(0,100)
-    return h.sort_values("최종실전점수", ascending=False)
-
-def estimate_tri(a,b,c):
-    raw = a["현재배당"]*.48 + b["현재배당"]*.36 + c["현재배당"]*.28
-    premium = 1 + ((a["현재배당"]+b["현재배당"]+c["현재배당"])/36)
-    return round(float(raw*premium*3.2),1)
-
-def estimate_trio(a,b,c):
-    raw = (a["현재배당"]+b["현재배당"]+c["현재배당"])/3
-    premium = 1 + ((a["현재배당"]+b["현재배당"]+c["현재배당"])/42)
-    return round(float(raw*premium*2.1),1)
-
-def combo_engine(h, stake, target_return, max_rows):
-    rows=[]
-    need = target_return/stake
-    for (course, race_no), g in h.groupby(["경마장","경주번호"]):
-        g = g.dropna(subset=["마번","현재배당"])
-        if len(g)<5: continue
-        for a,b,c in itertools.permutations(g.index,3):
-            h1,h2,h3 = g.loc[a],g.loc[b],g.loc[c]
-            if h1["1착점수"]<64 or h2["2착점수"]<58 or h3["3착점수"]<54: continue
-            odds=estimate_tri(h1,h2,h3)
-            nums=[int(h1["마번"]),int(h2["마번"]),int(h3["마번"])]
-            pop_trap = "인기마 과다 - 배당 죽음" if all(n<=3 for n in nums) else "복병 포함 - 실전 배당" if any(n>=6 for n in nums) else "보통"
-            judge = "🚀 120배 대박조합" if odds>=120 else "💰 60배 고수익조합" if odds>=60 else "🔥 30배 실전조합" if odds>=need else "👀 관찰" if odds>=20 else "⛔ 보류"
-            score = round(h1["1착점수"]*.35+h2["2착점수"]*.24+h3["3착점수"]*.20+min(odds,120)*.13-(h1["위험개수"]+h2["위험개수"]+h3["위험개수"])*2.3,1)
-            rows.append({"판정":judge,"경마장":course,"경주번호":race_no,"출발시간":h1["출발시간"],"방식":"삼쌍승","1착":f"{nums[0]}번 {h1['경주마']}","2착":f"{nums[1]}번 {h2['경주마']}","3착":f"{nums[2]}번 {h3['경주마']}","예상배당":odds,"투자금":stake,"예상환급":int(stake*odds),"예상순수익":int(stake*odds-stake),"조합점수":score,"신뢰등급":confidence_grade(score),"인기마제거판정":pop_trap,"위험합계":int(h1["위험개수"]+h2["위험개수"]+h3["위험개수"]),"메모":f"정확순서: {nums[0]}-{nums[1]}-{nums[2]}"})
-        for a,b,c in itertools.combinations(g.index,3):
-            h1,h2,h3 = g.loc[a],g.loc[b],g.loc[c]
-            odds=estimate_trio(h1,h2,h3)
-            if odds<15: continue
-            nums=sorted([int(h1["마번"]),int(h2["마번"]),int(h3["마번"])])
-            pop_trap = "인기마 과다 - 배당 죽음" if all(n<=3 for n in nums) else "복병 포함 - 실전 배당" if any(n>=6 for n in nums) else "보통"
-            judge = "🚀 120배 대박조합" if odds>=120 else "💰 60배 고수익조합" if odds>=60 else "🔥 30배 실전조합" if odds>=need else "👀 관찰" if odds>=20 else "⛔ 보류"
-            score = round(np.mean([h1["1착점수"],h2["2착점수"],h3["3착점수"]])*.62+min(odds,90)*.18+max([h1["3착점수"],h2["3착점수"],h3["3착점수"]])*.20-(h1["위험개수"]+h2["위험개수"]+h3["위험개수"])*2,1)
-            names=" / ".join([f"{int(x['마번'])}번 {x['경주마']}" for _,x in pd.DataFrame([h1,h2,h3]).iterrows()])
-            rows.append({"판정":judge,"경마장":course,"경주번호":race_no,"출발시간":h1["출발시간"],"방식":"삼복승","1착":"순서무관","2착":names,"3착":"","예상배당":odds,"투자금":stake,"예상환급":int(stake*odds),"예상순수익":int(stake*odds-stake),"조합점수":score,"신뢰등급":confidence_grade(score),"인기마제거판정":pop_trap,"위험합계":int(h1["위험개수"]+h2["위험개수"]+h3["위험개수"]),"메모":f"순서무관: {'-'.join(map(str,nums))}"})
-    out=pd.DataFrame(rows)
-    if len(out):
-        order={"🔥 30배 실전조합":0,"💰 60배 고수익조합":1,"🚀 120배 대박조합":2,"👀 관찰":3,"⛔ 보류":4}
-        out["정렬"]=out["판정"].map(order).fillna(9)
-        out=out.sort_values(["정렬","조합점수","예상배당"], ascending=[True,False,False]).drop(columns=["정렬"]).head(max_rows)
-    return out
-
-def roi_summary(records):
-    r=records.copy()
-    bet=r[r["결과"].isin(["적중","실패"])]
-    invested=len(bet)*10000
-    profit=int(pd.to_numeric(bet["수익"], errors="coerce").fillna(0).sum())
-    returned=invested+profit
-    roi=round(returned/invested*100,1) if invested else 0
-    return invested, returned, profit, roi
-
-
-def confidence_percent(score, risk_count=0):
-    try:
-        s = float(score)
-    except Exception:
-        s = 0
-    conf = s + 5
-    conf -= int(risk_count) * 4
-    return int(max(0, min(98, round(conf))))
-
-def star_rating(conf):
-    if conf >= 90:
-        return "★★★★★"
-    if conf >= 80:
-        return "★★★★☆"
-    if conf >= 70:
-        return "★★★☆☆"
-    if conf >= 60:
-        return "★★☆☆☆"
-    return "★☆☆☆☆"
-
-def red_warning_list(row):
-    warnings = []
-    try:
-        if float(row.get("체중증감", 0)) <= -12:
-            warnings.append("⚠️ 체중 -12kg 이상 급감")
-        elif abs(float(row.get("체중증감", 0))) >= 8:
-            warnings.append("⚠️ 체중 ±8kg 이상")
-    except Exception:
-        pass
-
-    try:
-        if float(row.get("출전간격일", 0)) >= 120:
-            warnings.append("⚠️ 4개월 이상 공백")
-        elif float(row.get("출전간격일", 0)) >= 90:
-            warnings.append("⚠️ 3개월 이상 공백")
-    except Exception:
-        pass
-
-    try:
-        vals = [int(x) for x in re.findall(r"\d+", str(row.get("최근5전", "")))][-5:]
-        if len(vals) >= 3 and vals[-1] > vals[0] and vals[-1] >= 6:
-            warnings.append("⚠️ 최근 5경기 급하락")
-    except Exception:
-        pass
-
-    try:
-        if int(row.get("마번", 0)) >= 9:
-            warnings.append("⚠️ 외곽 게이트")
-    except Exception:
-        pass
-
-    try:
-        if float(row.get("기수승률", 10)) < 8:
-            warnings.append("⚠️ 기수 승률 낮음")
-    except Exception:
-        pass
-
-    if str(row.get("마체상태", "")) == "불안":
-        warnings.append("⚠️ 마체상태 불안")
-    if str(row.get("조교상태", "")) == "하락":
-        warnings.append("⚠️ 조교 하락")
-    return warnings
-
-def apply_confidence_and_warnings(horses_df):
-    h = horses_df.copy()
-    if len(h) == 0:
-        return h
-    h["빨간경고"] = h.apply(lambda r: " / ".join(red_warning_list(r)) if red_warning_list(r) else "위험요소 없음", axis=1)
-    h["빨간경고수"] = h.apply(lambda r: len(red_warning_list(r)), axis=1)
-    h["확신도"] = h.apply(lambda r: confidence_percent(r.get("최종실전점수", 0), r.get("빨간경고수", 0)), axis=1)
-    h["추천별점"] = h["확신도"].apply(star_rating)
-    def final_grade(r):
-        if r["빨간경고수"] >= 3:
-            return "⚫ D등급 보류"
-        if r["확신도"] >= 90:
-            return "🟢 A등급 실전 가능"
-        if r["확신도"] >= 70:
-            return "🟡 B등급 소액"
-        if r["확신도"] >= 60:
-            return "🔴 C등급 관찰"
-        return "⚫ D등급 보류"
-    h["확신등급"] = h.apply(final_grade, axis=1)
-    return h
-
-def today_rest_decision(combos_df, horses_df, target_odds):
-    over30 = int((combos_df["예상배당"] >= target_odds).sum()) if combos_df is not None and len(combos_df) else 0
-    hh = apply_confidence_and_warnings(horses_df)
-    a_count = int((hh["확신등급"].astype(str).str.contains("A등급")).sum()) if len(hh) else 0
-    red3 = int((hh["빨간경고수"] >= 3).sum()) if len(hh) else 0
-    if over30 == 0 and a_count == 0:
-        return "⛔ 오늘은 관망", "30배 후보가 없고 A등급도 없습니다."
-    if red3 >= max(1, len(hh)//3):
-        return "⛔ 오늘은 관망", "빨간 경고가 많은 경주입니다."
-    if over30 >= 1 and a_count >= 1:
-        return "🔥 실전 가능", "30배 후보와 A등급 후보가 있습니다."
-    return "👀 소액/관찰", "후보는 있으나 확신도가 높지 않습니다."
-
-def record_window_stats(records, n=100):
-    if records is None or len(records) == 0:
-        return {"기록수":0, "적중률":0, "ROI":0, "총투자":0, "총회수":0, "순수익":0}
-    r = records.tail(n).copy()
-    bet = r[r["결과"].isin(["적중","실패"])]
-    if len(bet) == 0:
-        return {"기록수":len(r), "적중률":0, "ROI":0, "총투자":0, "총회수":0, "순수익":0}
-    hit = int((bet["결과"] == "적중").sum())
-    invested = len(bet) * 10000
-    profit = int(pd.to_numeric(bet["수익"], errors="coerce").fillna(0).sum())
-    returned = invested + profit
-    hit_rate = round(hit / len(bet) * 100, 1)
-    roi = round(returned / invested * 100, 1) if invested else 0
-    return {"기록수":len(bet), "적중률":hit_rate, "ROI":roi, "총투자":invested, "총회수":returned, "순수익":profit}
-
-def failure_top10(records):
-    if records is None or len(records) == 0:
-        return pd.DataFrame(columns=["실패원인","건수"])
-    fail = records[records["결과"] == "실패"].tail(500)
-    factors = []
-    for _, row in fail.iterrows():
-        text = str(row.get("공통요인", ""))
-        if text and text != "nan":
-            factors += [x for x in text.split("|") if x]
-    if not factors:
-        return pd.DataFrame(columns=["실패원인","건수"])
-    out = pd.Series(factors).value_counts().head(10).reset_index()
-    out.columns = ["실패원인","건수"]
-    return out
-
-
-
-def margin_score(row):
-    """
-    착차 분석:
-    순위만 보지 않고 얼마나 근소하게 졌는지/크게 졌는지 봅니다.
-    착차가 0.2~0.5면 강한 가산, 3마신 이상이면 감점.
-    """
-    try:
-        margin = float(row.get("착차", 0))
-    except Exception:
-        margin = 0
-    try:
-        rank = float(row.get("순위", 9))
-    except Exception:
-        rank = 9
-
-    if rank == 1:
-        return 92, "우승"
-    if rank <= 3 and margin <= 0.5:
-        return 88, "근소차 입상 - 강한 상승세"
-    if rank <= 3 and margin <= 1.5:
-        return 76, "입상권 양호"
-    if margin >= 3:
-        return 38, "착차 큼 - 과대평가 주의"
-    return 62, "보통 착차"
-
-def running_style_analysis(row):
-    """
-    초반/중반/4코너/결승 위치 변화로 전개 유형을 판단합니다.
-    """
-    vals = []
-    for k in ["초반위치", "중반위치", "4코너위치", "결승위치"]:
+if st.sidebar.button("추천/비교 로그 초기화", use_container_width=True):
+    for _p in [globals().get("RECO_FILE"), globals().get("COMPARE_FILE"), globals().get("RESULT_FILE")]:
         try:
-            vals.append(float(row.get(k, 0)))
-        except Exception:
-            vals.append(0)
-    if not vals or all(v == 0 for v in vals):
-        return 65, "전개자료 부족"
-
-    start, mid, corner, finish = vals
-    score = 65
-    notes = []
-
-    if start >= 7 and finish <= 3:
-        score += 20
-        notes.append("막판 추입 강함")
-    if start <= 2 and corner <= 2 and finish >= 5:
-        score -= 18
-        notes.append("초반만 빠르고 끝심 부족")
-    if start <= 3 and finish <= 3:
-        score += 12
-        notes.append("선행 유지형")
-    if corner - finish >= 3:
-        score += 12
-        notes.append("4코너 이후 탄력")
-    if finish - corner >= 3:
-        score -= 12
-        notes.append("직선에서 무너짐")
-
-    return max(0, min(100, score)), " / ".join(notes) if notes else "전개 보통"
-
-def normal_weight_score(row):
-    """
-    말별 정상체중 범위 분석.
-    평균체중이 있으면 평균 대비 이탈을 보고, 없으면 체중증감 기준으로 판단합니다.
-    """
-    try:
-        current = float(row.get("현재체중", 0))
-        avg = float(row.get("평균체중", 0))
-    except Exception:
-        current, avg = 0, 0
-
-    if current > 0 and avg > 0:
-        diff = current - avg
-    else:
-        try:
-            diff = float(row.get("체중증감", 0))
-        except Exception:
-            diff = 0
-
-    ad = abs(diff)
-    if ad <= 3:
-        return 92, f"정상체중 범위 diff {diff:+.1f}kg"
-    if ad <= 7:
-        return 66, f"체중 변화 주의 diff {diff:+.1f}kg"
-    if diff <= -8:
-        return 34, f"체중 급감 위험 diff {diff:+.1f}kg"
-    return 45, f"체중 급증 위험 diff {diff:+.1f}kg"
-
-def jockey_trainer_combo_stats(df):
-    d = ensure(df)
-    if len(d) == 0:
-        return pd.DataFrame()
-    d["기수조교사"] = d["기수"].astype(str) + " + " + d["조교사"].astype(str)
-    out = d.groupby("기수조교사").agg(
-        출전수=("기수조교사","count"),
-        평균기수승률=("기수승률","mean"),
-        평균조교사승률=("조교사승률","mean"),
-        평균순위=("순위","mean"),
-        우승수=("순위", lambda x: int((pd.to_numeric(x, errors="coerce")==1).sum())),
-        평균배당=("현재배당","mean")
-    ).reset_index()
-    out["조합승률"] = (out["우승수"] / out["출전수"] * 100).round(1)
-    out["기수조교사조합점수"] = (
-        out["평균기수승률"].fillna(10)*2.2 +
-        out["평균조교사승률"].fillna(10)*2.0 +
-        out["조합승률"].fillna(0)*1.3 +
-        (100 - out["평균순위"].fillna(6)*8)
-    ).clip(0,100).round(1)
-    return out.sort_values("기수조교사조합점수", ascending=False)
-
-def combo_pair_score(row, combo_df):
-    if combo_df is None or len(combo_df) == 0:
-        return 70
-    key = str(row.get("기수","")) + " + " + str(row.get("조교사",""))
-    hit = combo_df[combo_df["기수조교사"] == key]
-    if len(hit) == 0:
-        return 70
-    return float(hit.iloc[0]["기수조교사조합점수"])
-
-def detailed_review_records_default():
-    return pd.DataFrame([
-        {"날짜":"2026-06-09","경마장":"서울","경주":"1R","예상조합":"5-6-8","실제조합":"5-2-8","결과":"실패","빠진말":"2번","실패원인":"2번 인기마 과소평가|6번 체중 -9kg 무시|외곽 전개 실패","수정규칙":"체중 급감 말 감점 강화"},
-        {"날짜":"2026-06-09","경마장":"서울","경주":"2R","예상조합":"3-6-10","실제조합":"3-6-10","결과":"적중","빠진말":"","실패원인":"","수정규칙":"30~40배 삼복승 조합 유지"},
-    ])
-
-def review_failure_top(records):
-    if records is None or len(records) == 0:
-        return pd.DataFrame(columns=["복기원인","건수"])
-    fail = records[records["결과"] == "실패"].copy()
-    factors = []
-    for _, row in fail.iterrows():
-        factors += [x for x in str(row.get("실패원인","")).split("|") if x and x != "nan"]
-    if not factors:
-        return pd.DataFrame(columns=["복기원인","건수"])
-    out = pd.Series(factors).value_counts().head(10).reset_index()
-    out.columns = ["복기원인","건수"]
-    return out
-
-def add_review_plus_scores(horses_df, df, records):
-    h = horses_df.copy()
-    combo_df = jockey_trainer_combo_stats(df)
-
-    margin_calc = h.apply(margin_score, axis=1)
-    h["착차점수"] = [x[0] for x in margin_calc]
-    h["착차메모"] = [x[1] for x in margin_calc]
-
-    run_calc = h.apply(running_style_analysis, axis=1)
-    h["전개점수"] = [x[0] for x in run_calc]
-    h["전개메모"] = [x[1] for x in run_calc]
-
-    weight_calc = h.apply(normal_weight_score, axis=1)
-    h["정상체중점수"] = [x[0] for x in weight_calc]
-    h["정상체중메모"] = [x[1] for x in weight_calc]
-
-    h["기수조교사조합점수"] = h.apply(lambda r: combo_pair_score(r, combo_df), axis=1)
-
-    # Review score adjustment
-    h["복기강화점수"] = (
-        h["착차점수"]*0.22 +
-        h["전개점수"]*0.25 +
-        h["정상체중점수"]*0.22 +
-        h["기수조교사조합점수"]*0.21 +
-        h.get("최종실전점수", 60)*0.10
-    ).round(1).clip(0,100)
-
-    h["최종실전점수"] = (
-        h.get("최종실전점수", 60)*0.82 +
-        h["복기강화점수"]*0.18
-    ).round(1).clip(0,100)
-
-    if "확신도" in h.columns:
-        h["확신도"] = (h["확신도"]*0.85 + h["복기강화점수"]*0.15).round(0).astype(int).clip(0,98)
-
-    return h
-
-
-
-def reset_daily_purchase_count():
-    today = pd.Timestamp.today().strftime("%Y-%m-%d")
-    if st.session_state.get("daily_purchase_date", "") != today:
-        st.session_state.daily_purchase_date = today
-        st.session_state.daily_purchase_count = 0
-
-def combo_identity(row):
-    return f"{row.get('경마장','')}_{row.get('경주번호','')}_{row.get('방식','')}_{row.get('1착','')}_{row.get('2착','')}_{row.get('3착','')}_{row.get('예상배당','')}"
-
-def auto_save_observations(combos_df, top_n=10):
-    if combos_df is None or len(combos_df) == 0:
-        return 0
-    today = pd.Timestamp.today().strftime("%Y-%m-%d")
-    obs = st.session_state.observation_records.copy()
-    if "조합ID" not in obs.columns:
-        obs["조합ID"] = ""
-
-    c = combos_df.copy().head(top_n)
-    new_rows = []
-    existing = set(obs["조합ID"].astype(str).tolist())
-    for _, row in c.iterrows():
-        cid = combo_identity(row)
-        if cid in existing:
-            continue
-        new_rows.append({
-            "조합ID": cid,
-            "날짜": today,
-            "시간": row.get("출발시간",""),
-            "경마장": row.get("경마장",""),
-            "경주": f"{int(row.get('경주번호',0))}R" if pd.notna(row.get("경주번호", None)) else "",
-            "방식": row.get("방식",""),
-            "조합": f"{row.get('1착','')} / {row.get('2착','')} / {row.get('3착','')}",
-            "예상배당": row.get("예상배당",0),
-            "조합점수": row.get("조합점수",0),
-            "신뢰등급": row.get("신뢰등급",""),
-            "운영판정": row.get("운영판정", row.get("판정","")),
-            "관찰결과": "결과대기",
-            "실제결과": "",
-            "구매여부": "미구매 관찰",
-            "메모": row.get("메모","")
-        })
-    if new_rows:
-        st.session_state.observation_records = pd.concat([obs, pd.DataFrame(new_rows)], ignore_index=True)
-    return len(new_rows)
-
-def mark_combo_as_purchased(best_row):
-    reset_daily_purchase_count()
-    today = pd.Timestamp.today().strftime("%Y-%m-%d")
-    if st.session_state.daily_purchase_count >= daily_buy_limit:
-        return False, f"오늘 실제 구매 제한 {daily_buy_limit}회에 도달했습니다."
-    st.session_state.daily_purchase_count += 1
-    new = pd.DataFrame([{
-        "날짜": today,
-        "시간": best_row.get("출발시간",""),
-        "경마장": best_row.get("경마장",""),
-        "경주": f"{int(best_row.get('경주번호',0))}R" if pd.notna(best_row.get("경주번호", None)) else "",
-        "발견": best_row.get("판정",""),
-        "결과": "구매대기",
-        "수익": 0,
-        "방식": best_row.get("방식",""),
-        "조합": best_row.get("메모",""),
-        "예상배당": best_row.get("예상배당",0),
-        "공통요인": "실제구매"
-    }])
-    st.session_state.records = pd.concat([st.session_state.records, new], ignore_index=True)
-    return True, "실제 구매 후보로 저장했습니다. 결과 나오면 적중/실패로 바꾸면 됩니다."
-
-def update_learning_memory_from_records():
-    rows = []
-    today = pd.Timestamp.today().strftime("%Y-%m-%d")
-    # Observations: missed/failed factors
-    if "observation_records" in st.session_state and len(st.session_state.observation_records):
-        obs = st.session_state.observation_records.copy()
-        failed = obs[obs["관찰결과"].astype(str).isin(["실패","미적중","놓침"])] if "관찰결과" in obs.columns else pd.DataFrame()
-        hit = obs[obs["관찰결과"].astype(str).isin(["적중","성공"])] if "관찰결과" in obs.columns else pd.DataFrame()
-        if len(failed):
-            rows.append({"날짜":today,"유형":"관찰실패","요인":"관찰 후보 실패 증가","방향":"감점","가중치":-3,"근거":f"{len(failed)}건","적용여부":"적용"})
-        if len(hit):
-            rows.append({"날짜":today,"유형":"관찰적중","요인":"미구매 관찰 후보 적중","방향":"가산","가중치":3,"근거":f"{len(hit)}건","적용여부":"적용"})
-    if "records" in st.session_state and len(st.session_state.records):
-        r = st.session_state.records.copy()
-        fail = r[r["결과"].astype(str) == "실패"]
-        win = r[r["결과"].astype(str) == "적중"]
-        if len(fail):
-            rows.append({"날짜":today,"유형":"구매실패","요인":"실제 구매 실패 패턴","방향":"감점","가중치":-5,"근거":f"{len(fail.tail(20))}건","적용여부":"적용"})
-        if len(win):
-            rows.append({"날짜":today,"유형":"구매적중","요인":"실제 구매 적중 패턴","방향":"가산","가중치":5,"근거":f"{len(win.tail(20))}건","적용여부":"적용"})
-    if rows:
-        mem = st.session_state.learning_memory.copy()
-        st.session_state.learning_memory = pd.concat([mem, pd.DataFrame(rows)], ignore_index=True).drop_duplicates(subset=["날짜","유형","요인"], keep="last")
-
-def learning_evolution_score():
-    score = 50
-    mem = st.session_state.learning_memory if "learning_memory" in st.session_state else pd.DataFrame()
-    if len(mem):
-        score += pd.to_numeric(mem["가중치"], errors="coerce").fillna(0).tail(30).sum()
-    obs_count = len(st.session_state.observation_records) if "observation_records" in st.session_state else 0
-    buy_count = len(st.session_state.records) if "records" in st.session_state else 0
-    score += min(30, obs_count * 0.2 + buy_count * 0.5)
-    return int(max(0, min(100, score)))
-
-
-@st.cache_data(ttl=120, show_spinner=False)
-def server_side_heavy_analysis_cached(data_csv, records_csv, review_csv, stake, target_return, max_combos, max_daily_buys, base_stake, operation_mode):
-    """
-    서버에서 무거운 분석을 먼저 계산하고,
-    휴대폰은 계산된 결과만 빠르게 받아보는 캐시 레이어.
-    """
-    from io import StringIO
-    data = pd.read_csv(StringIO(data_csv)) if data_csv else pd.DataFrame()
-    records = pd.read_csv(StringIO(records_csv)) if records_csv else pd.DataFrame()
-    review_records = pd.read_csv(StringIO(review_csv)) if review_csv else pd.DataFrame()
-
-    h = horse_engine(data, records)
-    if "apply_confidence_and_warnings" in globals():
-        h = apply_confidence_and_warnings(h)
-    if "add_review_plus_scores" in globals():
-        h = add_review_plus_scores(h, data, review_records)
-        if "apply_confidence_and_warnings" in globals():
-            h = apply_confidence_and_warnings(h)
-
-    c = combo_engine(h, stake, target_return, max_combos)
-    if "combo_over_limit_guard" in globals():
-        op = combo_over_limit_guard(c, max_daily_buys, base_stake, operation_mode)
-    else:
-        op = c.copy()
-
-    target_odds = round(target_return / stake, 1) if stake else 30
-    if "today_summary_card" in globals():
-        summary = today_summary_card(h, c, target_odds, max_daily_buys)
-    else:
-        summary = {"오늘 경주 수":0, "30배 후보":len(c), "A등급 후보":0, "빨간경고 경주":0, "추천 구매 수":0, "하루 제한":max_daily_buys, "오늘 판단":"분석"}
-
-    if "race_one_line_conclusions" in globals():
-        one_line = race_one_line_conclusions(h, c, target_odds)
-    else:
-        one_line = pd.DataFrame()
-
-    if "purchase_vs_observe_stats" in globals():
-        pvo = purchase_vs_observe_stats()
-    else:
-        pvo = pd.DataFrame()
-
-    return h, c, op, summary, one_line, pvo
-
-def df_to_csv_safe(df):
-    try:
-        return df.to_csv(index=False)
-    except Exception:
-        return ""
-
-def mobile_card(title, body, kind="source-card"):
-    st.markdown(f"""
-    <div class="{kind}">
-      <div class="big">{title}</div>
-      <div style="font-size:18px;line-height:1.8;">{body}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-
-
-def parse_horse_numbers_from_combo_text(text):
-    nums = []
-    for x in re.findall(r"(\d+)번", str(text)):
-        try:
-            nums.append(int(x))
+            if _p and _p.exists():
+                _p.unlink()
         except Exception:
             pass
-    # fallback for combos like 5-6-8
-    if not nums:
-        for x in re.findall(r"\b\d+\b", str(text)):
-            try:
-                n = int(x)
-                if 1 <= n <= 20:
-                    nums.append(n)
-            except Exception:
-                pass
-    # preserve order, unique
-    out = []
-    for n in nums:
-        if n not in out:
-            out.append(n)
-    return out[:3]
+    st.sidebar.warning("로그 초기화 완료")
 
-def normalize_result_df(df):
-    if df is None or len(df) == 0:
-        return pd.DataFrame(columns=["날짜","경마장","경주","경주번호","1착","2착","3착","최종배당_삼복승","최종배당_삼쌍승","기록","주로상태"])
-    d = df.copy()
-    # Common aliases
-    aliases = {
-        "일자":"날짜", "경주일":"날짜",
-        "경마장명":"경마장",
-        "R":"경주", "경주명":"경주",
-        "race_no":"경주번호", "경주번호":"경주번호",
-        "일착":"1착", "1위":"1착", "1등":"1착",
-        "이착":"2착", "2위":"2착", "2등":"2착",
-        "삼착":"3착", "3위":"3착", "3등":"3착",
-        "삼복승배당":"최종배당_삼복승",
-        "삼쌍승배당":"최종배당_삼쌍승",
-        "최종배당":"최종배당_삼복승"
-    }
-    for old, new in aliases.items():
-        if old in d.columns and new not in d.columns:
-            d[new] = d[old]
-    for c in ["날짜","경마장","경주","경주번호","1착","2착","3착","최종배당_삼복승","최종배당_삼쌍승","기록","주로상태"]:
-        if c not in d.columns:
-            d[c] = ""
-    for c in ["경주번호","1착","2착","3착","최종배당_삼복승","최종배당_삼쌍승"]:
-        d[c] = pd.to_numeric(d[c], errors="coerce")
-    d["경주"] = d.apply(lambda r: r["경주"] if str(r["경주"]).strip() else (f"{int(r['경주번호'])}R" if pd.notna(r["경주번호"]) else ""), axis=1)
-    return d[["날짜","경마장","경주","경주번호","1착","2착","3착","최종배당_삼복승","최종배당_삼쌍승","기록","주로상태"]]
-
-@st.cache_data(ttl=60, show_spinner=False)
-def fetch_result_sheet(url):
+if st.sidebar.button("API 설정 초기화", use_container_width=True):
     try:
-        if not url:
-            return False, pd.DataFrame(), "결과표 주소 없음"
-        csv_url = normalize_sheet_url(url) if "normalize_sheet_url" in globals() else url
-        df = pd.read_csv(csv_url)
-        return True, normalize_result_df(df), ""
-    except Exception as e:
-        return False, pd.DataFrame(), str(e)
-
-def load_result_sheet_if_any():
-    if not result_sheet_url:
-        return False, "결과표 주소 없음"
-    ok, df, err = fetch_result_sheet(result_sheet_url)
-    if ok and len(df):
-        st.session_state.race_results = df
-        return True, f"결과표 {len(df)}행 자동 읽기 성공"
-    return False, f"결과표 읽기 실패: {err}"
-
-def judge_combo_against_result(combo_row, result_row):
-    try:
-        first = int(result_row.get("1착"))
-        second = int(result_row.get("2착"))
-        third = int(result_row.get("3착"))
+        if SETTINGS_FILE.exists():
+            SETTINGS_FILE.unlink()
+        st.sidebar.warning("API 설정 초기화 완료")
     except Exception:
-        return "결과부족", 0, "결과표 1/2/3착 부족"
+        st.sidebar.warning("초기화 시도 완료")
 
-    actual_order = [first, second, third]
-    actual_set = set(actual_order)
+st.sidebar.divider()
+st.sidebar.caption("왼쪽 메뉴가 안 보이면 브라우저 새로고침 또는 좌측 상단 > 아이콘 확인")
+# ===== 강제 사이드바 복구 끝 =====
 
-    way = str(combo_row.get("방식", ""))
-    combo_text = " ".join([str(combo_row.get(k, "")) for k in ["1착","2착","3착","조합","메모"]])
-    nums = parse_horse_numbers_from_combo_text(combo_text)
-    if len(nums) < 3:
-        return "조합부족", 0, "조합 마번 3개 인식 실패"
 
-    if "삼쌍" in way:
-        hit = nums[:3] == actual_order
-        final_odds = pd.to_numeric(result_row.get("최종배당_삼쌍승", 0), errors="coerce")
-        memo = f"예상순서 {nums[:3]} / 실제순서 {actual_order}"
-    else:
-        hit = set(nums[:3]) == actual_set
-        final_odds = pd.to_numeric(result_row.get("최종배당_삼복승", 0), errors="coerce")
-        memo = f"예상조합 {sorted(nums[:3])} / 실제조합 {sorted(actual_order)}"
+DATA_DIR = Path("maru_kra_data")
+DATA_DIR.mkdir(exist_ok=True)
 
-    if pd.isna(final_odds) or final_odds == 0:
-        final_odds = pd.to_numeric(combo_row.get("예상배당", 0), errors="coerce")
-    if pd.isna(final_odds):
-        final_odds = 0
+SETTINGS_FILE = DATA_DIR / "api_settings.json"
+RECO_FILE = DATA_DIR / "recommendation_bigdata_log.csv"
+RESULT_FILE = DATA_DIR / "race_result_records.csv"
+COMPARE_FILE = DATA_DIR / "prediction_result_compare_log.csv"
+WEIGHT_FILE = DATA_DIR / "learning_weights.json"
 
-    return ("적중" if hit else "실패"), float(final_odds), memo
+DEFAULT_SETTINGS = {
+    "api_key": "",
+    "save_api_key": False,
+    "race_url": "",
+    "entry_url": "",
+    "horse_url": "",
+    "body_url": "",
+    "gear_url": "",
+    "rating_url": "",
+    "odds_url": "",
+    "today_odds_url": "",
+    "result_detail_url": "",
+    "race_record_url": "",
+    "start_exam_url": "",
+    "judge_url": "",
+    "jockey_change_url": "",
+    "weather_alert_url": "",
+    "corner_pace_url": "",
+    "popularity_url": "",
+    "first_odds_url": "",
+    "second_odds_url": "",
+    "third_odds_url": "",
+    "kra_url": "https://m.kra.co.kr/main.do",
+    "track_place": "서울",
+    "bankroll": 100000,
+    "unit_bet": 1000,
+    "daily_loss_limit": 30000,
+    "profit_unlock": 200000,
+    "daily_budget": 30000,
+    "daily_entries_limit": 3
+}
 
-def find_result_for_combo(combo_row, results_df):
-    if results_df is None or len(results_df) == 0:
-        return None
-    course = str(combo_row.get("경마장", ""))
+DEFAULT_WEIGHTS = {
+    "recent": 2.2,
+    "win_rate": 0.45,
+    "place_rate": 0.30,
+    "rating": 0.55,
+    "rating_delta": 1.8,
+    "odds_value": 1.0,
+    "environment": 1.0,
+    "weight_penalty": 1.4,
+    "risk_penalty": 1.0,
+}
+
+SECRET_MAP = {
+    "api_key": ["API_KEY", "api_key"],
+    "race_url": ["RACE_URL", "race_url"],
+    "entry_url": ["ENTRY_URL", "entry_url"],
+    "horse_url": ["HORSE_URL", "horse_url"],
+    "body_url": ["BODY_URL", "body_url"],
+    "gear_url": ["GEAR_URL", "gear_url"],
+    "rating_url": ["RATING_URL", "rating_url"],
+    "odds_url": ["ODDS_URL", "odds_url"],
+    "today_odds_url": ["TODAY_ODDS_URL", "today_odds_url"],
+    "result_detail_url": ["RESULT_DETAIL_URL", "result_detail_url"],
+    "race_record_url": ["RACE_RECORD_URL", "race_record_url"],
+    "start_exam_url": ["START_EXAM_URL", "start_exam_url"],
+    "judge_url": ["JUDGE_URL", "judge_url"],
+    "jockey_change_url": ["JOCKEY_CHANGE_URL", "jockey_change_url"],
+    "weather_alert_url": ["WEATHER_ALERT_URL", "weather_alert_url"],
+    "corner_pace_url": ["CORNER_PACE_URL", "corner_pace_url"],
+    "popularity_url": ["POPULARITY_URL", "popularity_url"],
+    "first_odds_url": ["FIRST_ODDS_URL", "first_odds_url"],
+    "second_odds_url": ["SECOND_ODDS_URL", "second_odds_url"],
+    "third_odds_url": ["THIRD_ODDS_URL", "third_odds_url"],
+    "kra_url": ["KRA_URL", "kra_url"],
+}
+
+
+
+def mask_secret_url(url):
+    s = str(url or "")
     try:
-        race_no = int(combo_row.get("경주번호", 0))
+        import re as _re
+        s = _re.sub(r"(serviceKey=)[^&]+", r"\1***", s)
+        s = _re.sub(r"(servicekey=)[^&]+", r"\1***", s)
     except Exception:
-        race_no = 0
-    r = results_df.copy()
-    mask = pd.Series([True] * len(r))
-    if "경마장" in r.columns and course:
-        mask = mask & r["경마장"].astype(str).str.contains(course[:2], na=False)
-    if "경주번호" in r.columns and race_no:
-        mask = mask & (pd.to_numeric(r["경주번호"], errors="coerce") == race_no)
-    hit = r[mask]
-    if len(hit):
-        return hit.iloc[0]
-    return None
-
-def auto_compare_combos_with_results(combos_df, results_df, purchase_records=None, observation_records=None):
-    logs = []
-    if combos_df is not None and len(combos_df) and results_df is not None and len(results_df):
-        for _, row in combos_df.iterrows():
-            res = find_result_for_combo(row, results_df)
-            if res is None:
-                continue
-            판정, final_odds, memo = judge_combo_against_result(row, res)
-            stake_val = pd.to_numeric(row.get("자동투자금", row.get("투자금", 10000)), errors="coerce")
-            if pd.isna(stake_val) or stake_val <= 0:
-                stake_val = 10000
-            actual_return = int(stake_val * final_odds) if 판정 == "적중" else 0
-            logs.append({
-                "날짜": pd.Timestamp.today().strftime("%Y-%m-%d"),
-                "경마장": row.get("경마장",""),
-                "경주": f"{int(row.get('경주번호',0))}R" if pd.notna(row.get("경주번호", None)) else "",
-                "방식": row.get("방식",""),
-                "조합": " / ".join([str(row.get("1착","")), str(row.get("2착","")), str(row.get("3착",""))]),
-                "예상배당": row.get("예상배당",0),
-                "최종배당": final_odds,
-                "판정": 판정,
-                "구매여부": row.get("구매여부","미구매 관찰"),
-                "예상환급": row.get("예상환급",0),
-                "실제환급": actual_return,
-                "메모": memo
-            })
-    out = pd.DataFrame(logs)
-    if len(out):
-        prev = st.session_state.result_compare_log.copy() if "result_compare_log" in st.session_state else pd.DataFrame()
-        st.session_state.result_compare_log = pd.concat([prev, out], ignore_index=True).drop_duplicates(
-            subset=["날짜","경마장","경주","방식","조합"], keep="last"
-        )
-    return out
-
-def update_observations_from_results(results_df):
-    if "observation_records" not in st.session_state or len(st.session_state.observation_records) == 0:
-        return 0
-    obs = st.session_state.observation_records.copy()
-    updated = 0
-    for idx, row in obs.iterrows():
-        if str(row.get("관찰결과","")) not in ["결과대기", "대기", "", "nan"]:
-            continue
-        # Make pseudo combo row from observation
-        combo_row = {
-            "경마장": row.get("경마장",""),
-            "경주번호": int(str(row.get("경주","0")).replace("R","")) if str(row.get("경주","0")).replace("R","").isdigit() else 0,
-            "방식": row.get("방식",""),
-            "조합": row.get("조합",""),
-            "예상배당": row.get("예상배당",0),
-            "투자금": 10000
-        }
-        res = find_result_for_combo(combo_row, results_df)
-        if res is None:
-            continue
-        판정, final_odds, memo = judge_combo_against_result(combo_row, res)
-        obs.loc[idx, "관찰결과"] = 판정
-        obs.loc[idx, "실제결과"] = memo
-        obs.loc[idx, "메모"] = str(obs.loc[idx, "메모"]) + f" | 최종배당 {final_odds}"
-        updated += 1
-    st.session_state.observation_records = obs
-    return updated
-
-
-def super_alert_candidates(combos_df, min_odds=30, min_score=78, max_risk=3, max_count=3):
-    if combos_df is None or len(combos_df) == 0:
-        return pd.DataFrame()
-    c = combos_df.copy()
-    c["예상배당_num"] = pd.to_numeric(c.get("예상배당", 0), errors="coerce").fillna(0)
-    c["조합점수_num"] = pd.to_numeric(c.get("조합점수", 0), errors="coerce").fillna(0)
-    c["위험합계_num"] = pd.to_numeric(c.get("위험합계", 0), errors="coerce").fillna(0)
-    if "운영판정" not in c.columns:
-        c["운영판정"] = c.get("판정", "")
-    mask = (
-        (c["예상배당_num"] >= min_odds) &
-        (c["조합점수_num"] >= min_score) &
-        (c["위험합계_num"] <= max_risk) &
-        (~c.astype(str).agg(" ".join, axis=1).str.contains("보류|배당 죽음", na=False))
-    )
-    out = c[mask].copy()
-    if len(out) == 0:
-        return out
-    out["놓치면아까운점수"] = (
-        out["조합점수_num"] * 0.62 +
-        out["예상배당_num"].clip(0, 120) * 0.28 -
-        out["위험합계_num"] * 4
-    ).round(1)
-    return out.sort_values("놓치면아까운점수", ascending=False).head(max_count)
-
-
-def watch_mode_js(check_sec=30, keep_awake=True, auto_stop_min=0):
-    """
-    감시모드:
-    - 앱이 열린 상태에서 자동 새로고침
-    - Wake Lock API로 화면 꺼짐 방지 시도
-    - 알림 권한 요청
-    - 사용자가 수동으로 OFF 가능
-    """
-    keep_awake_js = """
-    let wakeLock = null;
-    async function requestWakeLock() {
-      try {
-        if ('wakeLock' in navigator) {
-          wakeLock = await navigator.wakeLock.request('screen');
-          console.log('MARU wake lock on');
-        }
-      } catch (err) { console.log('wake lock failed', err); }
-    }
-    requestWakeLock();
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') requestWakeLock();
-    });
-    """ if keep_awake else ""
-
-    notification_js = """
-    try {
-      if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
-      }
-    } catch(e) {}
-    """
-
-    auto_stop_js = ""
-    if auto_stop_min and auto_stop_min > 0:
-        auto_stop_js = f"""
-        setTimeout(function(){{
-          localStorage.setItem('maru_watch_auto_stop','1');
-        }}, {int(auto_stop_min)*60*1000});
-        """
-
-    components.html(f"""
-    <script>
-    {keep_awake_js}
-    {notification_js}
-    {auto_stop_js}
-    setTimeout(function() {{
-      window.location.reload();
-    }}, {int(check_sec) * 1000});
-    </script>
-    """, height=0)
-
-def browser_notification(title, body):
-    safe_title = str(title).replace("'", "").replace('"', "")
-    safe_body = str(body).replace("'", "").replace('"', "")
-    components.html(f"""
-    <script>
-    try {{
-      if ('Notification' in window && Notification.permission === 'granted') {{
-        new Notification('{safe_title}', {{ body: '{safe_body}' }});
-      }}
-    }} catch(e) {{}}
-    </script>
-    """, height=0)
-
-
-def parse_hhmm_to_minutes(x):
-    try:
-        h, m = str(x).strip().split(":")[:2]
-        return int(h) * 60 + int(m)
-    except Exception:
-        return None
-
-def minutes_to_hhmm(m):
-    if m is None:
-        return ""
-    m = int(m) % (24*60)
-    return f"{m//60:02d}:{m%60:02d}"
-
-def default_watch_window(day_type):
-    if day_type == "야간 금요일":
-        return "13:30", "21:10"
-    if day_type == "야간 토요일":
-        return "12:00", "20:10"
-    if day_type == "수동 설정":
-        return manual_watch_start, manual_watch_end
-    return "10:30", "18:10"
-
-def is_now_in_watch_window():
-    if not race_schedule_watch:
-        return True, "시간대 감시 OFF"
-    start, end = default_watch_window(race_day_type)
-    now = pd.Timestamp.now()
-    now_min = now.hour * 60 + now.minute
-    s = parse_hhmm_to_minutes(start)
-    e = parse_hhmm_to_minutes(end)
-    if s is None or e is None:
-        return True, "시간 설정 오류 - 감시 허용"
-    active = s <= now_min <= e if s <= e else (now_min >= s or now_min <= e)
-    return active, f"{start}~{end}"
-
-def race_time_minutes_from_row(row):
-    t = str(row.get("출발시간", "")).strip()
-    # HH:MM direct
-    m = parse_hhmm_to_minutes(t)
-    if m is not None:
-        return m
-    # fallback: 10시45분 style
-    import re
-    mt = re.search(r"(\d{1,2})\D+(\d{1,2})", t)
-    if mt:
-        return int(mt.group(1))*60 + int(mt.group(2))
-    return None
-
-def high_odds_time_phase(row):
-    rt = race_time_minutes_from_row(row)
-    if rt is None:
-        return "출발시간 없음", 999
-    now = pd.Timestamp.now()
-    now_min = now.hour * 60 + now.minute
-    diff = rt - now_min
-    if diff < -5:
-        return "경주 종료/지남", diff
-    if diff <= final_watch_min:
-        return "🚨 최종확인", diff
-    if diff <= 5:
-        return "🚨 특급감시", diff
-    if diff <= 10:
-        return "🔥 강력감시", diff
-    if diff <= high_odds_watch_min:
-        return "📈 30배 집중감시", diff
-    if diff <= 30:
-        return "👀 사전관찰", diff
-    return "대기", diff
-
-def add_time_phase_to_combos(combos_df):
-    if combos_df is None or len(combos_df) == 0:
-        return combos_df
-    c = combos_df.copy()
-    phases = c.apply(high_odds_time_phase, axis=1)
-    c["시간대상태"] = [p[0] for p in phases]
-    c["출발까지분"] = [p[1] for p in phases]
-    return c
-
-
-
-
-def count_df_rows(state_name):
-    try:
-        df = st.session_state.get(state_name, pd.DataFrame())
-        return len(df) if isinstance(df, pd.DataFrame) else 0
-    except Exception:
-        return 0
-
-def status_card(label, value, level="ok"):
-    cls = "status-ok" if level == "ok" else ("status-warn" if level == "warn" else "status-bad")
-    return f"""
-    <div class="{cls}">
-      <div class="status-title">{label}</div>
-      <div class="status-value">{value}</div>
-    </div>
-    """
-
-def connection_status_text():
-    source = st.session_state.get("source_status", "상태 없음")
-    rows = 0
-    try:
-        rows = len(data) if "data" in globals() else 0
-    except Exception:
-        rows = 0
-    return source, rows
-
-def render_status_dashboard():
-    if not stable_status_enabled:
-        return
-    source, data_rows = connection_status_text()
-    kra_level = "ok" if "성공" in str(source) or data_rows > 0 else "warn"
-    result_rows = count_df_rows("race_results")
-    compare_rows = count_df_rows("result_compare_log")
-    rec_rows = count_df_rows("auto_recommend_text_log")
-    obs_rows = count_df_rows("observation_records")
-    buy_rows = count_df_rows("purchase_records")
-    html = '<div class="status-grid">'
-    html += status_card("데이터 행 수", data_rows, "ok" if data_rows else "warn")
-    html += status_card("원본 연결", "OK" if kra_level=="ok" else "확인", kra_level)
-    html += status_card("결과표", result_rows, "ok" if result_rows else "warn")
-    html += status_card("추천저장", rec_rows, "ok" if rec_rows else "warn")
-    html += status_card("결과비교", compare_rows, "ok" if compare_rows else "warn")
-    html += status_card("미구매관찰", obs_rows, "ok" if obs_rows else "warn")
-    html += status_card("구매기록", buy_rows, "ok" if buy_rows else "warn")
-    html += status_card("감시모드", "ON" if st.session_state.get("watch_mode_on", False) else "OFF", "ok" if st.session_state.get("watch_mode_on", False) else "warn")
-    html += status_card("텔레그램", "준비" if external_alert_ready and telegram_chat_id and telegram_bot_token else "OFF", "ok" if external_alert_ready and telegram_chat_id and telegram_bot_token else "warn")
-    html += status_card("백업", "가능", "ok")
-    html += "</div>"
-    with st.expander("🛠 상태 점검판", expanded=True):
-        st.markdown(html, unsafe_allow_html=True)
-        st.caption(f"원본 상태: {source}")
-        if data_rows == 0:
-            st.warning("현재 분석 데이터가 비어 있습니다. KRA/Google Sheet/CSV 연결을 확인하세요.")
-        if result_rows == 0:
-            st.info("결과표가 없으면 추천은 가능하지만, 놓친 조합 학습은 제한됩니다.")
-        if rec_rows == 0:
-            st.info("추천기록이 아직 없습니다. 오늘 경주 데이터를 읽은 뒤 자동 저장됩니다.")
-
-def ultra_home_best_text():
-    base = operation_combos if "operation_combos" in globals() and len(operation_combos) else (combos if "combos" in globals() else pd.DataFrame())
-    row, reason = best_final_candidate(base) if "best_final_candidate" in globals() else (None, "판정불가")
-    if row is None:
-        return f"""
-        <div class="ultra-home">
-          <div class="ultra-home-title">🟡 지금은 관망</div>
-          <div class="ultra-home-body">
-            이유: <b>{reason}</b><br>
-            특급 조합이 없으면 무리하지 말고 관찰 기록만 쌓는 쪽이 좋습니다.<br>
-            감시모드: <b>{"ON" if st.session_state.get("watch_mode_on", False) else "OFF"}</b>
-          </div>
-        </div>
-        """
-    return f"""
-    <div class="ultra-home">
-      <div class="ultra-home-title">📱 현장용 초간단 홈</div>
-      <div class="ultra-home-body">
-        오늘 판단: <b>{reason}</b><br>
-        경주: <b>{row.get('경마장','')} {row.get('경주번호','')}R {row.get('출발시간','')}</b><br>
-        조합: <b>{row.get('방식','')} / {row.get('1착','')} - {row.get('2착','')} - {row.get('3착','')}</b><br>
-        예상배당: <b>{row.get('예상배당','')}배</b> /
-        점수: <b>{row.get('조합점수','')}</b> /
-        위험: <b>{row.get('위험합계','')}</b><br>
-        시간대: <b>{row.get('시간대상태','')}</b> /
-        출발까지: <b>{row.get('출발까지분','')}분</b><br>
-        감시모드: <b>{"ON" if st.session_state.get("watch_mode_on", False) else "OFF"}</b><br>
-        ※ 공식 페이지 최종 확인 후 수동구매
-      </div>
-    </div>
-    """
-
-def render_ultra_mobile_home():
-    if not ultra_mobile_home_enabled:
-        return
-    st.markdown(ultra_home_best_text(), unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("📱 감시 ON", key="ultra_watch_on", width="stretch"):
-            st.session_state.watch_mode_on = True
-            st.rerun()
-    with c2:
-        if st.button("🛑 감시 OFF", key="ultra_watch_off", width="stretch"):
-            st.session_state.watch_mode_on = False
-            st.rerun()
-    with c3:
-        if st.button("🔄 새로고침", key="ultra_refresh", width="stretch"):
-            st.rerun()
-
-def enhanced_result_url_candidates():
-    urls = []
-    base_urls = [
-        "https://race.kra.co.kr/raceScore/scoretableScoreList.do",
-        "https://race.kra.co.kr/raceScore/scoretableScoreList.do?Act=01",
-        "https://race.kra.co.kr/todayrace/todayrace.do",
-    ]
-    for u in base_urls:
-        urls.append(u)
-    return urls
-
-@st.cache_data(ttl=120, show_spinner=False)
-def fetch_kra_results_enhanced():
-    if not kra_result_auto_enhanced:
-        return False, pd.DataFrame(), "KRA 결과표 자동수집 강화 OFF"
-    errors = []
-    for url in enhanced_result_url_candidates():
-        try:
-            tables = pd.read_html(url)
-            good_tables = []
-            for t in tables:
-                cols = " ".join(map(str, t.columns)) + " " + " ".join(map(str, t.head(3).values.flatten()))
-                if any(k in cols for k in ["순위", "착순", "삼복", "삼쌍", "배당", "경주"]):
-                    good_tables.append(t)
-            if good_tables:
-                raw = pd.concat(good_tables, ignore_index=True)
-                return True, raw, url
-        except Exception as e:
-            errors.append(f"{url}: {str(e)[:80]}")
-    return False, pd.DataFrame(), " / ".join(errors[-2:]) if errors else "읽기 실패"
-
-def render_kra_result_enhanced_panel():
-    if not kra_result_auto_enhanced:
-        return
-    with st.expander("🏁 KRA 결과표 자동수집 강화", expanded=False):
-        ok, raw, msg = fetch_kra_results_enhanced()
-        if ok:
-            st.success(f"KRA 결과표 후보 읽기 성공: {msg}")
-            st.dataframe(raw.head(100), width="stretch")
-            st.caption("표 구조가 일정하지 않을 수 있어, 최종 반영 전에는 결과문구 자동해석/수동 확인을 함께 사용하세요.")
-        else:
-            st.warning(f"KRA 결과표 자동수집 실패 또는 표 없음: {msg}")
-            st.info("이 경우 결과문구 한 줄 붙여넣기 방식이 가장 안정적인 백업입니다.")
-
-def send_telegram_alert(text):
-    if not external_alert_ready or not telegram_bot_token or not telegram_chat_id:
-        return False, "텔레그램 설정 없음"
-    try:
-        import requests
-        url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
-        r = requests.post(url, data={"chat_id": telegram_chat_id, "text": text}, timeout=8)
-        return r.status_code == 200, r.text[:120]
-    except Exception as e:
-        return False, str(e)
-
-def render_external_alert_panel():
-    with st.expander("🔔 텔레그램/외부알림 준비", expanded=False):
-        st.markdown("""
-휴대폰이 완전히 꺼져 있거나 앱이 닫힌 상태에서 웹앱이 스스로 켜지는 것은 어렵습니다.  
-진짜 백그라운드 알림은 텔레그램/문자 API 같은 외부 알림이 필요합니다.
-""")
-        if external_alert_ready and telegram_bot_token and telegram_chat_id:
-            if st.button("텔레그램 테스트 알림 보내기", width="stretch"):
-                ok, msg = send_telegram_alert("MARU KRA 테스트 알림입니다.")
-                st.success("전송 성공") if ok else st.error(f"전송 실패: {msg}")
-        else:
-            st.info("왼쪽에 Bot Token과 Chat ID를 넣고 외부알림 준비를 켜면 테스트할 수 있습니다.")
-
-def render_google_save_ready_panel():
-    with st.expander("☁️ Google Sheet 자동저장 준비", expanded=False):
-        st.markdown("""
-현재는 백업 ZIP/CSV 방식이 가장 안전합니다.  
-Google Sheet에 앱이 직접 저장하려면 Google Cloud 서비스계정 키가 필요합니다.
-
-준비물:
-1. Google Cloud 서비스 계정 JSON  
-2. 해당 구글시트를 서비스계정 이메일과 공유  
-3. Streamlit Secrets에 JSON 저장  
-4. gspread 연동
-
-토큰 없이 자동쓰기까지 켜면 오류가 날 수 있어, 지금은 준비 화면으로 안전하게 두었습니다.
-""")
-        st.info("원하면 다음 버전에서 Google 서비스계정 방식까지 붙일 수 있습니다.")
-
-
-
-def safe_df(name, columns=None):
-    if name in st.session_state and isinstance(st.session_state[name], pd.DataFrame):
-        return st.session_state[name]
-    return pd.DataFrame(columns=columns or [])
-
-def best_final_candidate(combos_df):
-    if combos_df is None or len(combos_df) == 0:
-        return None, "후보 없음"
-    c = combos_df.copy()
-    c["예상배당_num"] = pd.to_numeric(c.get("예상배당", 0), errors="coerce").fillna(0)
-    c["조합점수_num"] = pd.to_numeric(c.get("조합점수", 0), errors="coerce").fillna(0)
-    c["위험합계_num"] = pd.to_numeric(c.get("위험합계", 0), errors="coerce").fillna(99)
-    if "신뢰등급" not in c.columns:
-        c["신뢰등급"] = ""
-    text_all = c.astype(str).agg(" ".join, axis=1)
-    c = c[~text_all.str.contains("보류|배당 죽음|과열|위험", na=False)]
-    if len(c) == 0:
-        return None, "보류/위험 후보 제외 후 남은 후보 없음"
-    # 하루 1~2회 구매 제한 기준
-    bought_today = 0
-    if "daily_purchase_count" in st.session_state:
-        try:
-            bought_today = int(st.session_state.daily_purchase_count)
-        except Exception:
-            bought_today = 0
-    max_buys = int(max_daily_buys) if "max_daily_buys" in globals() else 2
-    if bought_today >= max_buys:
-        return None, f"오늘 구매 제한 {max_buys}회 도달"
-    # practical score: high enough score, but not too risky
-    c["최종판정점수"] = (
-        c["조합점수_num"] * 0.72 +
-        c["예상배당_num"].clip(0, 100) * 0.18 -
-        c["위험합계_num"] * 4
-    ).round(1)
-    c = c.sort_values("최종판정점수", ascending=False)
-    best = c.iloc[0]
-    if best["조합점수_num"] >= 82 and best["위험합계_num"] <= 2:
-        reason = "소액 구매 가능"
-    elif best["조합점수_num"] >= 76 and best["위험합계_num"] <= 3 and best["예상배당_num"] >= 25:
-        reason = "관찰 후 소액 가능"
-    else:
-        reason = "관망 우선"
-    return best, reason
-
-def render_final_decision_card(combos_df):
-    if not final_decision_enabled:
-        return
-    row, reason = best_final_candidate(combos_df)
-    if row is None:
-        st.markdown(f"""
-        <div class="final-hold-card">
-          <div class="final-title">🟡 오늘은 관망 우선</div>
-          <div class="final-body">
-            이유: <b>{reason}</b><br>
-            무리하게 사는 날이 아니라, 미구매 관찰로 데이터만 쌓는 쪽이 좋습니다.
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-        return
-    odds = pd.to_numeric(row.get("예상배당", 0), errors="coerce")
-    risk = pd.to_numeric(row.get("위험합계", 99), errors="coerce")
-    score = pd.to_numeric(row.get("조합점수", 0), errors="coerce")
-    card_class = "final-buy-card" if "구매" in reason else "final-hold-card"
-    title = "🟢 오늘 최종 후보" if "구매" in reason else "🟡 오늘 관심 후보"
-    st.markdown(f"""
-    <div class="{card_class}">
-      <div class="final-title">{title}</div>
-      <div class="final-body">
-        판정: <b>{reason}</b><br>
-        경마장/경주: <b>{row.get('경마장','')} {row.get('경주번호','')}R {row.get('출발시간','')}</b><br>
-        방식: <b>{row.get('방식','')}</b><br>
-        조합: <b>{row.get('1착','')} / {row.get('2착','')} / {row.get('3착','')}</b><br>
-        예상배당: <b>{row.get('예상배당','')}배</b> /
-        점수: <b>{row.get('조합점수','')}</b> /
-        위험합계: <b>{row.get('위험합계','')}</b> /
-        신뢰등급: <b>{row.get('신뢰등급','')}</b><br>
-        ※ 공식 페이지에서 최종배당·출주상태 확인 후 수동으로만 구매
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-def make_backup_bundle_csv():
-    import io, zipfile as zf
-    buf = io.BytesIO()
-    frames = {
-        "race_results.csv": safe_df("race_results"),
-        "result_compare_log.csv": safe_df("result_compare_log"),
-        "auto_recommend_text_log.csv": safe_df("auto_recommend_text_log"),
-        "parsed_result_text_log.csv": safe_df("parsed_result_text_log"),
-        "observation_records.csv": safe_df("observation_records"),
-        "purchase_records.csv": safe_df("purchase_records"),
-        "review_records.csv": safe_df("review_records"),
-    }
-    with zf.ZipFile(buf, "w", zf.ZIP_DEFLATED) as zz:
-        for filename, df in frames.items():
-            zz.writestr(filename, df.to_csv(index=False, encoding="utf-8-sig"))
-    return buf.getvalue()
-
-def restore_backup_zip(uploaded):
-    import zipfile as zf, io
-    if uploaded is None:
-        return []
-    mapping = {
-        "race_results.csv": "race_results",
-        "result_compare_log.csv": "result_compare_log",
-        "auto_recommend_text_log.csv": "auto_recommend_text_log",
-        "parsed_result_text_log.csv": "parsed_result_text_log",
-        "observation_records.csv": "observation_records",
-        "purchase_records.csv": "purchase_records",
-        "review_records.csv": "review_records",
-    }
-    restored = []
-    data = uploaded.read()
-    with zf.ZipFile(io.BytesIO(data), "r") as zz:
-        for filename, state_name in mapping.items():
-            if filename in zz.namelist():
-                with zz.open(filename) as f:
-                    try:
-                        st.session_state[state_name] = pd.read_csv(f)
-                        restored.append(state_name)
-                    except Exception:
-                        pass
-    return restored
-
-def render_backup_panel():
-    if not backup_panel_enabled:
-        return
-    with st.expander("💾 기록 백업 / 불러오기", expanded=False):
-        st.markdown("""
-앱 서버가 재시작되면 내부 기록이 사라질 수 있습니다.  
-하루 끝나고 백업 ZIP을 받아두면 다음에 다시 불러와서 이어서 볼 수 있습니다.
-""")
-        backup_bytes = make_backup_bundle_csv()
-        st.download_button(
-            "💾 오늘 기록 전체 백업 ZIP 다운로드",
-            data=backup_bytes,
-            file_name=f"MARU_KRA_BACKUP_{pd.Timestamp.today().strftime('%Y%m%d')}.zip",
-            mime="application/zip",
-            width="stretch"
-        )
-        up = st.file_uploader("이전 백업 ZIP 불러오기", type=["zip"], key="restore_backup_zip")
-        if st.button("백업 불러오기 적용", width="stretch"):
-            if up:
-                restored = restore_backup_zip(up)
-                st.success(f"복원 완료: {', '.join(restored) if restored else '복원된 항목 없음'}")
-                st.rerun()
-            else:
-                st.warning("먼저 백업 ZIP 파일을 올려주세요.")
-
-def daily_close_report():
-    today = pd.Timestamp.today().strftime("%Y-%m-%d")
-    rec = safe_df("auto_recommend_text_log")
-    obs = safe_df("observation_records")
-    buy = safe_df("purchase_records")
-    comp = safe_df("result_compare_log")
-    result = safe_df("race_results")
-
-    def today_filter(df):
-        if df is None or len(df) == 0 or "날짜" not in df.columns:
-            return df.iloc[0:0] if df is not None else pd.DataFrame()
-        return df[df["날짜"].astype(str).str[:10] == today]
-
-    rec_t = today_filter(rec)
-    obs_t = today_filter(obs)
-    buy_t = today_filter(buy)
-    comp_t = today_filter(comp)
-    result_t = today_filter(result)
-
-    hit_buy = int((buy_t.get("결과", pd.Series(dtype=str)).astype(str) == "적중").sum()) if len(buy_t) else 0
-    obs_hit = int((obs_t.get("관찰결과", pd.Series(dtype=str)).astype(str) == "적중").sum()) if len(obs_t) else 0
-    comp_hit = int((comp_t.get("판정", pd.Series(dtype=str)).astype(str) == "적중").sum()) if len(comp_t) else 0
-    comp_fail = int((comp_t.get("판정", pd.Series(dtype=str)).astype(str) == "실패").sum()) if len(comp_t) else 0
-
-    missed_notes = []
-    if len(obs_t) and "관찰결과" in obs_t.columns:
-        missed = obs_t[obs_t["관찰결과"].astype(str) == "적중"]
-        for _, r in missed.head(5).iterrows():
-            missed_notes.append(f"{r.get('경마장','')} {r.get('경주','') or str(r.get('경주번호',''))+'R'} {r.get('조합','')}")
-    missed_text = "<br>".join(missed_notes) if missed_notes else "아직 없음"
-
-    report = f"""
-    <div class="report-box">
-      <b>📘 하루 마감 리포트</b><br>
-      오늘 추천 저장: <b>{len(rec_t)}건</b><br>
-      결과표 입력/해석: <b>{len(result_t)}경주</b><br>
-      실제 구매: <b>{len(buy_t)}건</b> / 구매 적중: <b>{hit_buy}건</b><br>
-      미구매 관찰: <b>{len(obs_t)}건</b> / 샀으면 맞았던 조합: <b>{obs_hit}건</b><br>
-      결과비교 적중/실패: <b>{comp_hit} / {comp_fail}</b><br><br>
-      <b>놓치면 아까웠던 후보</b><br>
-      {missed_text}<br><br>
-      <b>내일 보정 포인트</b><br>
-      - 특급알림 후보는 결과표까지 꼭 비교<br>
-      - 미구매 적중 조합이 반복되면 해당 유형 가산<br>
-      - 위험합계 4 이상 조합은 계속 관찰 위주
-    </div>
-    """
-    return report
-
-def render_daily_close_report():
-    if not daily_report_enabled:
-        return
-    with st.expander("📘 하루 마감 리포트", expanded=True):
-        st.markdown(daily_close_report(), unsafe_allow_html=True)
-        st.download_button(
-            "📘 마감 리포트 HTML 다운로드",
-            data=daily_close_report().encode("utf-8"),
-            file_name=f"MARU_KRA_DAILY_REPORT_{pd.Timestamp.today().strftime('%Y%m%d')}.html",
-            mime="text/html",
-            width="stretch"
-        )
-
-
-
-def combo_to_recommend_sentence(row):
-    return (
-        f"[MARU추천] {row.get('경마장','')} {row.get('경주번호','')}R "
-        f"{row.get('출발시간','')} / {row.get('방식','')} / "
-        f"{row.get('1착','')} - {row.get('2착','')} - {row.get('3착','')} / "
-        f"예상 {row.get('예상배당','')}배 / 점수 {row.get('조합점수','')} / "
-        f"위험 {row.get('위험합계','')} / 등급 {row.get('신뢰등급','')}"
-    )
-
-def auto_save_recommendations(combos_df, max_rows=20):
-    if not auto_save_recommend_text:
-        return 0
-    if combos_df is None or len(combos_df) == 0:
-        return 0
-    c = combos_df.copy().head(max_rows)
-    rows = []
-    for _, row in c.iterrows():
-        combo = " / ".join([str(row.get("1착","")), str(row.get("2착","")), str(row.get("3착",""))])
-        rows.append({
-            "날짜": pd.Timestamp.today().strftime("%Y-%m-%d"),
-            "경마장": row.get("경마장",""),
-            "경주번호": row.get("경주번호",""),
-            "출발시간": row.get("출발시간",""),
-            "추천문구": combo_to_recommend_sentence(row),
-            "방식": row.get("방식",""),
-            "조합": combo,
-            "예상배당": row.get("예상배당",0),
-            "조합점수": row.get("조합점수",0),
-            "위험합계": row.get("위험합계",0),
-            "신뢰등급": row.get("신뢰등급",""),
-            "상태": "자동저장"
-        })
-    new = pd.DataFrame(rows)
-    prev = st.session_state.auto_recommend_text_log.copy()
-    out = pd.concat([prev, new], ignore_index=True).drop_duplicates(
-        subset=["날짜","경마장","경주번호","방식","조합"], keep="last"
-    )
-    st.session_state.auto_recommend_text_log = out
-    return len(new)
-
-def parse_result_text_block(text, default_course="서울"):
-    """
-    KRA/문자/메모 형태를 대략 자동해석.
-    예:
-    1경주 5 2 8 삼복승 38.5 삼쌍승 210.4
-    서울 2R 3번 6번 10번 삼복 31.2 삼쌍 145.0
-    """
-    rows = []
-    if not text or not str(text).strip():
-        return pd.DataFrame(columns=["날짜","경마장","경주번호","1착","2착","3착","최종배당_삼복승","최종배당_삼쌍승","원문"])
-    lines = [x.strip() for x in str(text).splitlines() if x.strip()]
-    for line in lines:
-        course = default_course
-        if "부산" in line or "부경" in line:
-            course = "부산경남"
-        elif "제주" in line:
-            course = "제주"
-        elif "서울" in line:
-            course = "서울"
-
-        race_no = None
-        m = re.search(r"(\d{1,2})\s*(?:경주|R|r)", line)
-        if m:
-            race_no = int(m.group(1))
-
-        # Find horse numbers.
-        # Prefer numbers followed by 번. If not enough, use remaining small numbers after race number.
-        nums = [int(x) for x in re.findall(r"(\d{1,2})\s*번", line)]
-        if len(nums) < 3:
-            allnums = [int(x) for x in re.findall(r"\b(\d{1,2})\b", line)]
-            # remove race_no once
-            temp = []
-            removed = False
-            for n in allnums:
-                if race_no is not None and n == race_no and not removed:
-                    removed = True
-                    continue
-                if 1 <= n <= 20:
-                    temp.append(n)
-            nums = temp[:3]
-
-        if race_no is None or len(nums) < 3:
-            continue
-
-        삼복 = None
-        삼쌍 = None
-        m1 = re.search(r"(?:삼복승|삼복)\D*(\d+(?:\.\d+)?)", line)
-        m2 = re.search(r"(?:삼쌍승|삼쌍)\D*(\d+(?:\.\d+)?)", line)
-        if m1:
-            삼복 = float(m1.group(1))
-        if m2:
-            삼쌍 = float(m2.group(1))
-
-        # Fallback: after first 4 integers, larger decimal odds
-        if 삼복 is None or 삼쌍 is None:
-            decimals = [float(x) for x in re.findall(r"\b(\d{1,4}(?:\.\d+)?)\b", line)]
-            odds_candidates = [x for x in decimals if x > 10 and x not in nums and x != race_no]
-            if 삼복 is None and odds_candidates:
-                삼복 = odds_candidates[0]
-            if 삼쌍 is None and len(odds_candidates) > 1:
-                삼쌍 = odds_candidates[1]
-
-        rows.append({
-            "날짜": pd.Timestamp.today().strftime("%Y-%m-%d"),
-            "경마장": course,
-            "경주번호": race_no,
-            "1착": nums[0],
-            "2착": nums[1],
-            "3착": nums[2],
-            "최종배당_삼복승": 삼복 if 삼복 is not None else "",
-            "최종배당_삼쌍승": 삼쌍 if 삼쌍 is not None else "",
-            "원문": line
-        })
-    return pd.DataFrame(rows)
-
-def apply_parsed_results_to_system(parsed_df):
-    if parsed_df is None or len(parsed_df) == 0:
-        return 0, 0
-    result_df = normalize_result_df(parsed_df.rename(columns={"원문":"메모"})) if "normalize_result_df" in globals() else parsed_df
-    prev = st.session_state.race_results.copy() if "race_results" in st.session_state else pd.DataFrame()
-    st.session_state.race_results = pd.concat([prev, result_df], ignore_index=True).drop_duplicates(
-        subset=["날짜","경마장","경주번호"], keep="last"
-    )
-    prev_text = st.session_state.parsed_result_text_log.copy()
-    st.session_state.parsed_result_text_log = pd.concat([prev_text, parsed_df], ignore_index=True).drop_duplicates(
-        subset=["날짜","경마장","경주번호"], keep="last"
-    )
-
-    base_combos = operation_combos if "operation_combos" in globals() and len(operation_combos) else combos
-    compare_df = auto_compare_combos_with_results(base_combos, st.session_state.race_results) if "auto_compare_combos_with_results" in globals() else pd.DataFrame()
-    updated = update_observations_from_results(st.session_state.race_results) if "update_observations_from_results" in globals() else 0
-    if "update_learning_memory_from_records" in globals():
-        update_learning_memory_from_records()
-    return len(compare_df), updated
-
-
-
-def schedule_watch_summary(combos_df):
-    active, window = is_now_in_watch_window()
-    c = add_time_phase_to_combos(combos_df)
-    if c is None or len(c) == 0:
-        return active, window, pd.DataFrame()
-    hot = c[c["시간대상태"].astype(str).str.contains("집중감시|강력감시|특급감시|최종확인", na=False)].copy()
-    return active, window, hot.sort_values("출발까지분")
-
-def should_fire_time_based_super_alert(row):
-    phase, diff = high_odds_time_phase(row)
-    if phase in ["🚨 최종확인", "🚨 특급감시", "🔥 강력감시"]:
-        return True
-    return False
-
-
-
-def render_watch_mode_panel(super_count=0):
-    if st.session_state.watch_mode_on:
-        st.markdown(f"""
-        <div class="watch-on">
-          <div class="watch-title">📱 감시모드 ON</div>
-          앱을 열어둔 상태에서 자동 확인 중입니다.<br>
-          확인 간격: <b>{watch_check_sec}초</b><br>
-          특급 후보: <b>{super_count}개</b><br>
-          화면 꺼짐 방지: <b>{"시도 중" if watch_keep_awake else "OFF"}</b><br>
-          필요하면 아래 버튼으로 바로 끌 수 있습니다.
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div class="watch-off">
-          <div class="watch-title">📴 감시모드 OFF</div>
-          감시모드가 꺼져 있습니다. 앱이 자동으로 휴대폰을 열 수는 없지만,
-          감시모드를 켜두면 앱이 열린 상태에서 자동 확인·진동·경고음이 작동합니다.
-        </div>
-        """, unsafe_allow_html=True)
-
-
-
-def super_alert_js(sound_on=True):
-    # Strong vibration + siren-like beep. Browser may block sound until user interaction.
-    sound_script = """
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const gain = ctx.createGain(); gain.gain.value = 0.12; gain.connect(ctx.destination);
-      let t = ctx.currentTime;
-      for (let i=0; i<7; i++) {
-        let osc = ctx.createOscillator();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(i % 2 === 0 ? 880 : 1320, t + i*0.18);
-        osc.connect(gain);
-        osc.start(t + i*0.18);
-        osc.stop(t + i*0.18 + 0.14);
-      }
-      setTimeout(()=>ctx.close(), 1800);
-    } catch(e) {}
-    """ if sound_on else ""
-    components.html(f"""
-    <script>
-    try {{
-      if (navigator.vibrate) {{
-        navigator.vibrate([900,160,900,160,1300,250,1300]);
-      }}
-    }} catch(e) {{}}
-    {sound_script}
-    </script>
-    """, height=0)
-
-def sms_style_text(row):
-    return f"""[MARU 특급 경고]
-놓치면 아까운 조합 발견
-
-경마장: {row.get('경마장','')}
-경주: {row.get('경주번호','')}R / {row.get('출발시간','')}
-방식: {row.get('방식','')}
-1착: {row.get('1착','')}
-2착: {row.get('2착','')}
-3착: {row.get('3착','')}
-
-예상배당: {row.get('예상배당','')}배
-시간대: {row.get('시간대상태','')} / 출발까지 {row.get('출발까지분','')}분
-조합점수: {row.get('조합점수','')}
-위험합계: {row.get('위험합계','')}
-신뢰등급: {row.get('신뢰등급','')}
-
-※ 공식 페이지에서 직접 확인 후 수동구매
-"""
-
-def render_super_alert(row):
-    st.markdown(f"""
-    <div class="super-alert">
-      <div class="super-alert-title">🚨 놓치면 아까운 특급 조합</div>
-      <div class="super-alert-body">
-        경마장: <b>{row.get('경마장','')}</b> /
-        경주: <b>{row.get('경주번호','')}R {row.get('출발시간','')}</b><br>
-        방식: <b>{row.get('방식','')}</b><br>
-        1착: <b>{row.get('1착','')}</b><br>
-        2착: <b>{row.get('2착','')}</b><br>
-        3착: <b>{row.get('3착','')}</b><br>
-        예상배당: <b>{row.get('예상배당','')}배</b> /
-        조합점수: <b>{row.get('조합점수','')}</b> /
-        위험합계: <b>{row.get('위험합계','')}</b><br>
-        신뢰등급: <b>{row.get('신뢰등급','')}</b>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.markdown(f'<div class="sms-alert">{sms_style_text(row)}</div>', unsafe_allow_html=True)
-
-
-
-def result_compare_stats():
-    log = st.session_state.result_compare_log if "result_compare_log" in st.session_state else pd.DataFrame()
-    if len(log) == 0:
-        return pd.DataFrame([{"구분":"결과비교","전체":0,"적중":0,"실패":0,"적중률":"0%","평균최종배당":0}])
-    hit = int((log["판정"] == "적중").sum())
-    fail = int((log["판정"] == "실패").sum())
-    total = hit + fail
-    rate = round(hit / total * 100, 1) if total else 0
-    avg_odds = round(pd.to_numeric(log["최종배당"], errors="coerce").fillna(0).mean(), 1)
-    return pd.DataFrame([{"구분":"결과비교","전체":total,"적중":hit,"실패":fail,"적중률":f"{rate}%","평균최종배당":avg_odds}])
-
-
-
-def observation_stats():
-    obs = st.session_state.observation_records if "observation_records" in st.session_state else pd.DataFrame()
-    if len(obs) == 0:
-        return pd.DataFrame([{"구분":"관찰","전체":0,"적중":0,"실패":0,"대기":0,"관찰적중률":"0%"}])
-    hit = int(obs["관찰결과"].astype(str).isin(["적중","성공"]).sum())
-    fail = int(obs["관찰결과"].astype(str).isin(["실패","미적중","놓침"]).sum())
-    pending = int(obs["관찰결과"].astype(str).isin(["결과대기","대기",""]).sum())
-    total_done = hit + fail
-    rate = round(hit / total_done * 100, 1) if total_done else 0
-    return pd.DataFrame([{"구분":"미구매 관찰","전체":len(obs),"적중":hit,"실패":fail,"대기":pending,"관찰적중률":f"{rate}%"}])
-
-def purchase_vs_observe_stats():
-    obs = observation_stats()
-    purchase = st.session_state.records.copy() if "records" in st.session_state else pd.DataFrame()
-    if len(purchase):
-        bet = purchase[purchase["결과"].astype(str).isin(["적중","실패"])]
-        hit = int((bet["결과"].astype(str) == "적중").sum())
-        fail = int((bet["결과"].astype(str) == "실패").sum())
-        total = hit + fail
-        rate = round(hit / total * 100, 1) if total else 0
-    else:
-        hit = fail = total = rate = 0
-    return pd.DataFrame([
-        {"구분":"실제구매","전체":total,"적중":hit,"실패":fail,"대기":0,"적중률":f"{rate}%"},
-        {"구분":"미구매관찰","전체":int(obs.iloc[0]["전체"]),"적중":int(obs.iloc[0]["적중"]),"실패":int(obs.iloc[0]["실패"]),"대기":int(obs.iloc[0]["대기"]),"적중률":obs.iloc[0]["관찰적중률"]},
-    ])
-
-
-
-def factor_table(records, result):
-    r=records[records["결과"]==result].tail(20)
-    factors=[]
-    for _,row in r.iterrows():
-        factors += [x for x in str(row.get("공통요인","")).split("|") if x and x!="nan"]
-    if not factors: return pd.DataFrame(columns=["요인","건수"])
-    s=pd.Series(factors).value_counts().reset_index()
-    s.columns=["요인","건수"]
+        if "serviceKey=" in s:
+            head, tail = s.split("serviceKey=", 1)
+            rest = tail.split("&", 1)
+            s = head + "serviceKey=***" + (("&" + rest[1]) if len(rest) > 1 else "")
     return s
 
-st.sidebar.title("설정")
+def secret_get(names, default=""):
+    """
+    Streamlit Secrets에서 값 가져오기.
+    [maru] 그룹 안과 최상단 둘 다 지원합니다.
+    """
+    try:
+        # st.secrets는 일반 dict처럼 접근 가능
+        if "maru" in st.secrets:
+            for n in names:
+                if n in st.secrets["maru"]:
+                    return str(st.secrets["maru"][n])
+        for n in names:
+            if n in st.secrets:
+                return str(st.secrets[n])
+    except Exception:
+        pass
+    return default
 
-st.sidebar.success("안정 롤백판: 텔레그램/Google Sheet/감시모드 메뉴 복구")
-st.sidebar.caption("이번 버전은 꼬인 API 강제입력판을 중단하고, 기존 안정 UI로 되돌린 버전입니다.")
+def load_local_json(path, default):
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            merged = dict(default)
+            merged.update(data)
+            return merged
+        except Exception:
+            return dict(default)
+    return dict(default)
 
-mobile_fast_mode = st.sidebar.checkbox("📱 모바일 빠른모드", value=True)
-show_deep_tabs = st.sidebar.checkbox("상세 분석 탭 표시", value=False)
-server_cache_ttl = st.sidebar.selectbox("서버 분석 캐시 시간", [30, 60, 120, 300, 600], index=2, format_func=lambda x: f"{x}초")
+def load_settings():
+    """
+    우선순위:
+    1. DEFAULT
+    2. 앱 내부 저장파일
+    3. Streamlit Secrets
+    Secrets가 있으면 항상 최종 우선 적용.
+    """
+    s = load_local_json(SETTINGS_FILE, DEFAULT_SETTINGS)
+    for key, names in SECRET_MAP.items():
+        val = secret_get(names, "")
+        if val:
+            s[key] = val
+    if secret_get(["API_KEY", "api_key"], ""):
+        s["save_api_key"] = True
+    return s
 
-course = st.sidebar.selectbox("경마장", list(KRA_URLS.keys()))
-stake = st.sidebar.number_input("1조합 투자금", 100, 50000, 10000, 1000)
-target_return = st.sidebar.number_input("목표환급", 10000, 5000000, 300000, 10000)
-max_combos = st.sidebar.slider("표시 조합 수", 3, 50, 15)
-official = st.sidebar.text_input("공식 페이지", KRA_URLS[course])
-auto_run_enabled = st.sidebar.checkbox("앱 켜면 자동 분석", value=True)
-auto_refresh_sec = st.sidebar.selectbox("자동 새로고침 간격", [0, 30, 60, 120, 300], index=2, format_func=lambda x: "꺼짐" if x == 0 else f"{x}초")
-auto_alarm_enabled = st.sidebar.checkbox("30배 후보 자동 진동", value=True)
-st.sidebar.markdown("---")
-result_sheet_url = st.sidebar.text_input("결과표 Google Sheet/CSV 주소", "")
-auto_result_compare = st.sidebar.checkbox("결과표 자동 비교", value=True)
-final_odds_mode = st.sidebar.checkbox("최종배당 통계 반영", value=True)
-st.sidebar.markdown("---")
-super_alert_enabled = st.sidebar.checkbox("🚨 특급 강력알림 ON", value=True)
-super_alert_min_odds = st.sidebar.number_input("특급알림 최소배당", 20.0, 300.0, 30.0, 5.0)
-super_alert_min_score = st.sidebar.number_input("특급알림 최소점수", 60.0, 100.0, 78.0, 1.0)
-super_alert_max_risk = st.sidebar.slider("특급알림 최대 위험합계", 0, 10, 3)
-super_alert_sound = st.sidebar.checkbox("경고음 ON", value=True)
-st.sidebar.markdown("---")
-watch_check_sec = st.sidebar.selectbox("감시모드 자동확인 간격", [15, 30, 60, 120, 300], index=1, format_func=lambda x: f"{x}초")
-watch_keep_awake = st.sidebar.checkbox("감시 중 화면 꺼짐 방지 시도", value=True)
-watch_auto_stop_min = st.sidebar.selectbox("감시모드 자동 종료", [0, 30, 60, 120, 180, 240], index=0, format_func=lambda x: "수동으로 끄기" if x == 0 else f"{x}분 후 자동 종료")
-st.sidebar.markdown("---")
-auto_save_recommend_text = st.sidebar.checkbox("추천문구 자동 저장", value=True)
-result_text_parse_on = st.sidebar.checkbox("결과문구 붙여넣기 자동해석", value=True)
-st.sidebar.markdown("---")
-final_decision_enabled = st.sidebar.checkbox("오늘 최종판정 카드 ON", value=True)
-backup_panel_enabled = st.sidebar.checkbox("기록 백업/불러오기 ON", value=True)
-daily_report_enabled = st.sidebar.checkbox("하루 마감 리포트 ON", value=True)
-st.sidebar.markdown("---")
-stable_status_enabled = st.sidebar.checkbox("상태 점검판 ON", value=True)
-ultra_mobile_home_enabled = st.sidebar.checkbox("초간단 모바일 홈 ON", value=True)
-kra_result_auto_enhanced = st.sidebar.checkbox("KRA 결과표 자동수집 강화", value=True)
-external_alert_ready = st.sidebar.checkbox("텔레그램/외부알림 준비", value=False)
-telegram_chat_id = st.sidebar.text_input("텔레그램 Chat ID", "", type="password")
-telegram_bot_token = st.sidebar.text_input("텔레그램 Bot Token", "", type="password")
-google_auto_save_ready = st.sidebar.checkbox("Google Sheet 자동저장 준비", value=False)
-race_schedule_watch = st.sidebar.checkbox("경주 시간대 자동 감시", value=True)
-race_day_type = st.sidebar.selectbox("경마 시간표 유형", ["일반 주간", "야간 금요일", "야간 토요일", "수동 설정"], index=0)
-manual_watch_start = st.sidebar.text_input("수동 감시 시작", "10:30")
-manual_watch_end = st.sidebar.text_input("수동 감시 종료", "18:10")
-high_odds_watch_min = st.sidebar.slider("30배 집중감시 시작: 출발 전 몇 분", 5, 40, 20)
-final_watch_min = st.sidebar.slider("최종확인: 출발 전 몇 분", 1, 10, 3)
-
-google_sheet_url = st.sidebar.text_input("Google Sheet CSV 주소", "")
-github_csv_url = st.sidebar.text_input("GitHub CSV 백업 주소", "")
-data_priority = st.sidebar.selectbox("데이터 우선순위", ["KRA → Google Sheet → GitHub CSV → 샘플", "Google Sheet → KRA → GitHub CSV → 샘플", "GitHub CSV → Google Sheet → KRA → 샘플"])
-st.sidebar.markdown("---")
-max_daily_buys = st.sidebar.slider("하루 최대 추천 구매 수", 1, 5, 2)
-base_stake = st.sidebar.number_input("기본 투자금", 1000, 100000, int(stake), 1000)
-operation_mode = st.sidebar.selectbox("운영 모드", ["안전형", "균형형", "공격형"], index=1)
-evolution_mode = st.sidebar.checkbox("AI 진화 학습 ON", value=True)
-auto_observe_enabled = st.sidebar.checkbox("구매 안 해도 후보 자동 관찰저장", value=True)
-daily_buy_limit = st.sidebar.slider("하루 실제 구매 제한", 1, 2, 1)
-observe_top_n = st.sidebar.slider("자동 관찰 저장 후보 수", 3, 20, 10)
-weather_type = st.sidebar.selectbox("날씨 조건", ["보통", "비", "무더움", "추움"])
-sand_status = st.sidebar.selectbox("모래/주로 특수상태", ["보통", "모래 새로교체", "모래 깊음", "모래 가벼움", "안쪽 무거움", "바깥쪽 무거움"])
-
-st.markdown('<div class="title-card">🐎 MARU KRA 운영안정 최종실전 AI</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-card">초간단 모바일 홈 → 상태 점검판 → KRA 결과수집 강화 → 백업/알림 준비까지 운영 안정성을 높였습니다.</div>', unsafe_allow_html=True)
-
-if auto_refresh_sec and auto_refresh_sec > 0:
-    components.html(f"""
-    <script>
-    setTimeout(function() {{
-        window.location.reload();
-    }}, {auto_refresh_sec * 1000});
-    </script>
-    """, height=0)
+def save_json(path, data):
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        (DATA_DIR / "api_settings_backup.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
+def sheets_secret_get(names, default=""):
+    try:
+        if "google_sheets" in st.secrets:
+            for n in names:
+                if n in st.secrets["google_sheets"]:
+                    return st.secrets["google_sheets"][n]
+        for n in names:
+            if n in st.secrets:
+                return st.secrets[n]
+    except Exception:
+        pass
+    return default
 
-def normalize_sheet_url(url):
-    url = str(url).strip()
+def sheets_enabled():
+    return bool(sheets_secret_get(["SHEET_ID", "sheet_id"], ""))
+
+def get_gsheet_client():
+    """
+    Streamlit Secrets의 [google_sheets] 서비스계정 JSON으로 Google Sheets 연결.
+    없거나 실패하면 None 반환하고 앱은 로컬 CSV로 계속 작동.
+    """
+    if not sheets_enabled():
+        return None, "Google Sheets 미설정"
+
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+
+        # 방법 1: SERVICE_ACCOUNT_JSON 전체를 TOML multiline string으로 저장
+        raw = sheets_secret_get(["SERVICE_ACCOUNT_JSON", "service_account_json"], "")
+        if raw:
+            if isinstance(raw, str):
+                info = json.loads(raw)
+            else:
+                info = dict(raw)
+        else:
+            # 방법 2: [google_sheets.service_account] 형태의 TOML table
+            info = {}
+            try:
+                if "google_sheets" in st.secrets and "service_account" in st.secrets["google_sheets"]:
+                    info = dict(st.secrets["google_sheets"]["service_account"])
+            except Exception:
+                info = {}
+
+        if not info:
+            return None, "서비스계정 정보 없음"
+
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client, ""
+    except Exception as e:
+        return None, "Google Sheets 연결 실패: " + str(e)
+
+def get_sheet_workbook():
+    client, err = get_gsheet_client()
+    if client is None:
+        return None, err
+    try:
+        sheet_id = str(sheets_secret_get(["SHEET_ID", "sheet_id"], "")).strip()
+        if not sheet_id:
+            return None, "SHEET_ID 없음"
+        return client.open_by_key(sheet_id), ""
+    except Exception as e:
+        return None, "시트 열기 실패: " + str(e)
+
+def get_or_create_ws(wb, title, headers):
+    try:
+        ws = wb.worksheet(title)
+    except Exception:
+        ws = wb.add_worksheet(title=title, rows=1000, cols=max(20, len(headers) + 5))
+        ws.append_row(headers)
+        return ws
+
+    try:
+        first = ws.row_values(1)
+        if not first:
+            ws.append_row(headers)
+    except Exception:
+        pass
+    return ws
+
+def df_from_worksheet(title, headers):
+    wb, err = get_sheet_workbook()
+    if wb is None:
+        return pd.DataFrame(), err
+    try:
+        ws = get_or_create_ws(wb, title, headers)
+        records = ws.get_all_records()
+        return pd.DataFrame(records), ""
+    except Exception as e:
+        return pd.DataFrame(), "시트 읽기 실패: " + str(e)
+
+def append_sheet_row(title, row, headers):
+    wb, err = get_sheet_workbook()
+    if wb is None:
+        return False, err
+    try:
+        ws = get_or_create_ws(wb, title, headers)
+        all_headers = ws.row_values(1)
+        if not all_headers:
+            all_headers = headers
+            ws.append_row(all_headers)
+
+        # 새 컬럼이 생기면 헤더 확장
+        changed = False
+        for k in row.keys():
+            if k not in all_headers:
+                all_headers.append(k)
+                changed = True
+        if changed:
+            ws.update("1:1", [all_headers])
+
+        values = [row.get(h, "") for h in all_headers]
+        ws.append_row(values, value_input_option="USER_ENTERED")
+        return True, ""
+    except Exception as e:
+        return False, "시트 저장 실패: " + str(e)
+
+def file_to_sheet_title(path):
+    name = str(path)
+    if "recommendation" in name:
+        return "recommendations"
+    if "compare" in name:
+        return "comparisons"
+    if "result" in name:
+        return "results"
+    return "logs"
+
+def default_headers_for_path(path):
+    title = file_to_sheet_title(path)
+    if title == "recommendations":
+        return ["저장시각","날짜","경마장","경주번호","출발시간","판정","공격삼쌍승","방어삼복승","보조삼쌍승","예상배당","신뢰도","추천금액","오늘손익","누적손익","날씨","주로","모래","바람"]
+    if title == "comparisons":
+        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","실제삼쌍","실제삼복","투입금","환급금","수익률","분석결과","메모"]
+    if title == "results":
+        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","투입금","환급금","수익률","분석결과","메모"]
+    return ["저장시각","내용"]
+
+
+def read_table(path):
+    # Google Sheets가 설정되어 있으면 PC/모바일 공용 기록을 우선 읽음
+    try:
+        if sheets_enabled():
+            title = file_to_sheet_title(path)
+            headers = default_headers_for_path(path)
+            df, err = df_from_worksheet(title, headers)
+            if not df.empty:
+                return df
+    except Exception:
+        pass
+
+    if path.exists():
+        try:
+            return pd.read_csv(path)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def append_table(path, row):
+    # 1) Google Sheets 저장: PC/모바일 공용
+    try:
+        if sheets_enabled():
+            title = file_to_sheet_title(path)
+            headers = default_headers_for_path(path)
+            ok, err = append_sheet_row(title, row, headers)
+            if not ok:
+                st.warning("Google Sheets 저장 실패: " + str(err))
+    except Exception as e:
+        try:
+            st.warning("Google Sheets 저장 중 오류: " + str(e))
+        except Exception:
+            pass
+
+    # 2) 로컬 CSV도 백업 저장
+    df = pd.DataFrame()
+    if path.exists():
+        try:
+            df = pd.read_csv(path)
+        except Exception:
+            df = pd.DataFrame()
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+    return df
+
+
+def today():
+    return today_kst()
+
+
+
+def current_setting_payload():
+    payload = {}
+    try:
+        if isinstance(settings, dict):
+            payload.update(settings)
+    except Exception:
+        pass
+    try:
+        payload.update(_force_payload)
+    except Exception:
+        pass
+    return payload
+
+def resolve_api_url(var_name, secret_keys=None, default=""):
+    """
+    API URL 변수가 누락되어도 앱이 멈추지 않게 Secrets/settings/session_state에서 안전하게 찾습니다.
+    """
+    secret_keys = secret_keys or []
+    try:
+        val = globals().get(var_name, "")
+        if val:
+            return val
+    except Exception:
+        pass
+
+    try:
+        if "settings" in globals() and isinstance(settings, dict):
+            for k in [var_name] + secret_keys:
+                if settings.get(k):
+                    return settings.get(k)
+    except Exception:
+        pass
+
+    try:
+        if "maru" in st.secrets:
+            for k in secret_keys:
+                if k in st.secrets["maru"]:
+                    return st.secrets["maru"][k]
+    except Exception:
+        pass
+
+    try:
+        for k in secret_keys:
+            if k in st.secrets:
+                return st.secrets[k]
+    except Exception:
+        pass
+
+    try:
+        for k in [var_name] + secret_keys:
+            if k in st.session_state:
+                return st.session_state[k]
+    except Exception:
+        pass
+
+    return default
+
+def build_api_url(url):
+    """
+    안전형 자동완성:
+    기본 주소만 넣으면 serviceKey/pageNo/numOfRows/resultType까지만 붙입니다.
+    rcDate, meet 같은 API별 변수는 자동으로 붙이지 않습니다.
+    이유: API마다 필수 변수 이름이 달라서 잘못 붙이면 HTTP 500이 늘어납니다.
+    """
+    url = str(url or "").strip()
     if not url:
         return ""
-    # Published CSV URL already
-    if "output=csv" in url or "format=csv" in url:
-        return url
-    # Google Sheets edit URL -> CSV export URL
-    if "docs.google.com/spreadsheets" in url and "/d/" in url:
-        try:
-            sheet_id = url.split("/d/")[1].split("/")[0]
-            gid = "0"
-            if "gid=" in url:
-                gid = url.split("gid=")[1].split("&")[0].split("#")[0]
-            return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
-        except Exception:
-            return url
+
+    key = str(api_key or "").strip()
+    ymd = today_kst()
+
+    url = url.replace("{serviceKey}", key)
+    url = url.replace("{today}", ymd)
+    url = url.replace("{ymd}", ymd)
+
+    sep = "&" if "?" in url else "?"
+    extras = []
+    low = url.lower()
+
+    if "servicekey=" not in low and key:
+        extras.append("serviceKey=" + key)
+    if "pageno=" not in low:
+        extras.append("pageNo=1")
+    if "numofrows=" not in low:
+        extras.append("numOfRows=100")
+    if "resulttype=" not in low and "_type=" not in low and "type=" not in low:
+        extras.append("resultType=json")
+
+    if extras:
+        url = url + sep + "&".join(extras)
+
     return url
 
-@st.cache_data(ttl=60)
-def fetch_csv_from_url(url):
+def json_to_df(obj):
+    if isinstance(obj, dict):
+        for path in [["response","body","items","item"], ["response","body","item"], ["items","item"], ["data"], ["result"], ["body","items","item"]]:
+            cur = obj
+            ok = True
+            for p in path:
+                if isinstance(cur, dict) and p in cur:
+                    cur = cur[p]
+                else:
+                    ok = False
+                    break
+            if ok:
+                obj = cur
+                break
+    if isinstance(obj, dict):
+        obj = [obj]
+    return make_unique_columns(pd.json_normalize(obj))
+
+def xml_to_df(text):
+    root = ET.fromstring(text)
+    rows = []
+    for item in root.findall(".//item"):
+        rows.append({c.tag: c.text for c in item})
+    return make_unique_columns(pd.DataFrame(rows))
+
+def fetch_api(url):
+    if not str(url).strip():
+        return pd.DataFrame(), ""
+    if not api_key.strip() and "serviceKey=" not in str(url):
+        return pd.DataFrame(), "API Key 미입력"
     try:
-        csv_url = normalize_sheet_url(url)
-        if not csv_url:
-            return False, pd.DataFrame(), "주소 없음"
-        df = pd.read_csv(csv_url)
-        return True, df, ""
+        req_url = build_api_url(url)
+        res = requests.get(req_url, timeout=15)
+        if res.status_code != 200:
+            return pd.DataFrame(), f"HTTP {res.status_code}"
+        txt = res.text.strip()
+        if txt.startswith("{") or txt.startswith("[") or "json" in res.headers.get("content-type", ""):
+            return json_to_df(res.json()), ""
+        return xml_to_df(txt), ""
     except Exception as e:
-        return False, pd.DataFrame(), str(e)
+        return pd.DataFrame(), str(e)
 
-def load_google_sheet_data():
-    if not google_sheet_url:
-        return False, "Google Sheet 주소 없음"
-    ok, df, err = fetch_csv_from_url(google_sheet_url)
-    if ok and len(df):
-        st.session_state.df = df
-        st.session_state.source_status = "Google Sheet 자동 읽기 성공"
-        st.session_state.auto_analysis_status = "자동: Google Sheet → 분석 완료"
-        return True, "Google Sheet 성공"
-    return False, f"Google Sheet 실패: {err}"
 
-def load_github_csv_data():
-    if not github_csv_url:
-        return False, "GitHub CSV 주소 없음"
-    ok, df, err = fetch_csv_from_url(github_csv_url)
-    if ok and len(df):
-        st.session_state.df = df
-        st.session_state.source_status = "GitHub CSV 백업 자동 읽기 성공"
-        st.session_state.auto_analysis_status = "자동: GitHub CSV → 분석 완료"
-        return True, "GitHub CSV 성공"
-    return False, f"GitHub CSV 실패: {err}"
+# 환경/날씨 변수 기본값 보강
+auto_weather = globals().get("auto_weather", True)
+manual_weather = globals().get("manual_weather", "흐림")
+manual_track = globals().get("manual_track", "양호")
+manual_sand = globals().get("manual_sand", "보통")
+manual_wind = globals().get("manual_wind", "보통")
 
-def load_kra_data():
-    ok, tables, err = fetch_kra_tables(KRA_URLS[course])
-    st.session_state.raw_tables = tables[:5] if ok else []
-    converted = []
-    for t in st.session_state.raw_tables:
-        c = normalize_kra(t, course)
-        if c is not None:
-            converted.append(c)
-    if converted:
-        st.session_state.df = pd.concat(converted, ignore_index=True)
-        st.session_state.source_status = "KRA 원본표 자동변환 성공"
-        st.session_state.auto_analysis_status = "자동: KRA 원본표 → 분석 완료"
-        return True, "KRA 성공"
-    return False, "KRA 원본표 자동변환 실패"
 
-def smart_auto_load_data():
-    logs = []
-    if data_priority.startswith("KRA"):
-        steps = [("KRA", load_kra_data), ("Google Sheet", load_google_sheet_data), ("GitHub CSV", load_github_csv_data)]
-    elif data_priority.startswith("Google"):
-        steps = [("Google Sheet", load_google_sheet_data), ("KRA", load_kra_data), ("GitHub CSV", load_github_csv_data)]
-    else:
-        steps = [("GitHub CSV", load_github_csv_data), ("Google Sheet", load_google_sheet_data), ("KRA", load_kra_data)]
+# 환경 변수 별칭 보강
+weather = globals().get("weather", manual_weather)
+track = globals().get("track", manual_track)
+sand = globals().get("sand", manual_sand)
+wind = globals().get("wind", manual_wind)
 
-    for name, fn in steps:
-        ok, msg = fn()
-        logs.append(f"{name}: {msg}")
-        if ok:
-            st.session_state.auto_load_log = " | ".join(logs)
-            return True
+def fetch_env():
+    auto_weather = bool(globals().get("auto_weather", True))
+    try:
+        if "auto_weather" in st.session_state:
+            auto_weather = bool(st.session_state["auto_weather"])
+    except Exception:
+        pass
+    manual_weather = globals().get("manual_weather", st.session_state.get("manual_weather", "흐림") if "manual_weather" in st.session_state else "흐림")
+    manual_track = globals().get("manual_track", st.session_state.get("manual_track", "양호") if "manual_track" in st.session_state else "양호")
+    manual_sand = globals().get("manual_sand", st.session_state.get("manual_sand", "보통") if "manual_sand" in st.session_state else "보통")
+    manual_wind = globals().get("manual_wind", st.session_state.get("manual_wind", "보통") if "manual_wind" in st.session_state else "보통")
 
-    st.session_state.source_status = "자동 데이터 읽기 실패. 샘플/수동 CSV 기준 분석"
-    st.session_state.auto_analysis_status = "자동: 외부데이터 실패 → 샘플/수동 CSV 기준 분석"
-    st.session_state.auto_load_log = " | ".join(logs)
+    env = {"weather":"맑음", "track":"양호", "sand":"보통", "wind":"없음", "source":"기본", "precip":0, "wind_speed":0}
+    if auto_weather:
+        coords = {"서울":(37.4438,127.0165), "부산경남":(35.1545,128.8782), "제주":(33.4097,126.3934)}
+        lat, lon = coords[track_place]
+        try:
+            url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,precipitation,weather_code,wind_speed_10m&timezone=Asia%2FSeoul"
+            cur = requests.get(url, timeout=8).json().get("current", {})
+            precip = float(cur.get("precipitation", 0) or 0)
+            wind_speed = float(cur.get("wind_speed_10m", 0) or 0)
+            code = int(cur.get("weather_code", 0) or 0)
+            weather = "비" if precip >= 0.3 or code in [51,53,55,61,63,65,80,81,82,95,96,99] else ("흐림" if code in [1,2,3,45,48] else "맑음")
+            if code in [71,73,75,77,85,86]:
+                weather = "눈"
+            wind = "없음" if wind_speed < 2 else ("측풍" if wind_speed < 5 else "맞바람")
+            if weather in ["비","눈"] and precip >= 3:
+                track, sand = "포화", "무거움"
+            elif weather in ["비","눈"] and precip >= 1:
+                track, sand = "다습", "무거움"
+            elif weather in ["비","눈"]:
+                track, sand = "다습", "보통"
+            else:
+                track, sand = "양호", "보통"
+            env = {"weather":weather, "track":track, "sand":sand, "wind":wind, "source":"자동수집", "precip":precip, "wind_speed":wind_speed}
+        except Exception:
+            env["source"] = "자동실패"
+
+    if manual_weather != "자동": env["weather"] = manual_weather
+    if manual_track != "자동": env["track"] = manual_track
+    if manual_sand != "자동": env["sand"] = manual_sand
+    if manual_wind != "자동": env["wind"] = manual_wind
+    return env
+
+def sample_data():
+    race = pd.DataFrame([{"경마장":track_place, "경주번호":"6", "출발시간":"16:05"}])
+    horse = pd.DataFrame([
+        {"마번":5,"마명":"마루스피드","최근순위":2,"승률":18,"복승률":42,"부담중량":55,"예상배당":9.2,"레이팅":78,"레이팅변화":4,"선행력":82,"추입력":70,"파워":78,"순발력":84,"습주로":72,"모래적응":80},
+        {"마번":11,"마명":"그린파워","최근순위":3,"승률":15,"복승률":38,"부담중량":54.5,"예상배당":7.8,"레이팅":75,"레이팅변화":2,"선행력":75,"추입력":78,"파워":82,"순발력":77,"습주로":80,"모래적응":83},
+        {"마번":2,"마명":"블루런","최근순위":4,"승률":12,"복승률":35,"부담중량":53,"예상배당":12.5,"레이팅":72,"레이팅변화":3,"선행력":70,"추입력":83,"파워":76,"순발력":79,"습주로":84,"모래적응":75},
+        {"마번":7,"마명":"라스트킹","최근순위":5,"승률":10,"복승률":30,"부담중량":55.5,"예상배당":15.4,"레이팅":70,"레이팅변화":-1,"선행력":68,"추입력":72,"파워":85,"순발력":69,"습주로":86,"모래적응":88},
+        {"마번":3,"마명":"해피로드","최근순위":6,"승률":8,"복승률":25,"부담중량":56,"예상배당":22,"레이팅":66,"레이팅변화":1,"선행력":65,"추입력":74,"파워":70,"순발력":73,"습주로":68,"모래적응":71}
+    ])
+    risk = pd.DataFrame([
+        {"마번":5,"출발위험":0,"주행위험":1},
+        {"마번":11,"출발위험":1,"주행위험":0},
+        {"마번":2,"출발위험":0,"주행위험":0},
+        {"마번":7,"출발위험":1,"주행위험":1},
+        {"마번":3,"출발위험":2,"주행위험":1}
+    ])
+    return race, horse, risk
+
+
+def normalize_meet_value(x):
+    s = str(x or "").strip()
+    if s in ["1", "서울", "SEOUL", "Seoul"]:
+        return "서울"
+    if s in ["2", "제주", "JEJU", "Jeju"]:
+        return "제주"
+    if s in ["3", "부산경남", "부경", "BUSAN", "Busan", "부산"]:
+        return "부산경남"
+    return s
+
+def find_col_by_names(df, names):
+    if df is None or df.empty:
+        return None
+    lower = {str(c).lower(): c for c in df.columns}
+    for n in names:
+        if n.lower() in lower:
+            return lower[n.lower()]
+    for c in df.columns:
+        cl = str(c).lower()
+        for n in names:
+            if n.lower() in cl:
+                return c
+    return None
+
+def soft_filter_one_api(df, key="api"):
+    """
+    선택 경주 필터는 기본적으로 부드럽게 적용합니다.
+    엄격 필터를 켠 경우에만 rcDate/meet/rcNo가 정확히 맞는 행만 남깁니다.
+    단, 필터 후 데이터가 완전히 비면 원본을 유지합니다.
+    """
+    if df is None or df.empty:
+        return df
+
+    try:
+        strict = bool(strict_race_filter)
+    except Exception:
+        strict = False
+
+    if not strict:
+        return df
+
+    d = df.copy()
+    original = d.copy()
+
+    desired_date = str(target_date or today_kst()).replace("-", "").strip()
+    desired_meet = normalize_meet_value(track_place)
+    desired_rc = int(target_rc_no)
+
+    date_col = find_col_by_names(d, ["rcDate", "raceDate", "meetDate", "date", "ymd"])
+    meet_col = find_col_by_names(d, ["meet", "meetCd", "rcourse", "경마장"])
+    rc_col = find_col_by_names(d, ["rcNo", "raceNo", "경주번호"])
+
+    try:
+        if date_col:
+            ds = d[date_col].astype(str).str.replace("-", "", regex=False).str.strip()
+            d = d[ds == desired_date]
+    except Exception:
+        pass
+
+    try:
+        if meet_col:
+            ms = d[meet_col].apply(normalize_meet_value)
+            d = d[ms == desired_meet]
+    except Exception:
+        pass
+
+    try:
+        if rc_col:
+            rs = pd.to_numeric(d[rc_col], errors="coerce")
+            d = d[rs == desired_rc]
+    except Exception:
+        pass
+
+    # 너무 많이 걸러져 비면 원본 유지
+    if d.empty:
+        return original
+    return d
+
+
+def _safe_str(x):
+    return str(x or "").strip()
+
+def _num_series(s):
+    return pd.to_numeric(s, errors="coerce")
+
+def current_target_values():
+    try:
+        d = str(target_date).replace("-", "").strip()
+    except Exception:
+        d = today()
+    try:
+        rc = int(target_rc_no)
+    except Exception:
+        rc = None
+    try:
+        meet = track_place
+    except Exception:
+        meet = ""
+    return d, meet, rc
+
+def normalize_meet_for_filter(x):
+    s = str(x or "").strip()
+    if s in ["1", "서울", "SEOUL", "Seoul", "seoul"]:
+        return "서울"
+    if s in ["2", "제주", "JEJU", "Jeju", "jeju"]:
+        return "제주"
+    if s in ["3", "부산경남", "부경", "부산", "BUSAN", "Busan", "busan"]:
+        return "부산경남"
+    return s
+
+def find_any_col(df, names):
+    if df is None or df.empty:
+        return None
+    lower = {str(c).lower(): c for c in df.columns}
+    for n in names:
+        if str(n).lower() in lower:
+            return lower[str(n).lower()]
+    for c in df.columns:
+        cl = str(c).lower()
+        for n in names:
+            if str(n).lower() in cl:
+                return c
+    return None
+
+def smart_current_filter(df, api_name=""):
+    """
+    현재 선택 경주만 우선 사용합니다.
+    rcDate / meet / rcNo 컬럼이 있으면 자동 필터.
+    필터 후 1행 이상이면 필터된 데이터 사용.
+    완전히 비면 원본 유지하되 추천 단계에서는 관망 처리.
+    """
+    if df is None or df.empty:
+        return df
+
+    d = df.copy()
+    original = d.copy()
+    target_date_s, target_meet, target_rc = current_target_values()
+
+    date_col = find_any_col(d, ["rcDate", "raceDate", "meetDate", "date", "ymd"])
+    meet_col = find_any_col(d, ["meet", "meetCd", "rcourse", "경마장"])
+    rc_col = find_any_col(d, ["rcNo", "raceNo", "경주번호"])
+
+    try:
+        if date_col:
+            ds = d[date_col].astype(str).str.replace("-", "", regex=False).str.strip()
+            d = d[ds == target_date_s]
+    except Exception:
+        pass
+
+    try:
+        if meet_col:
+            ms = d[meet_col].apply(normalize_meet_for_filter)
+            d = d[ms == normalize_meet_for_filter(target_meet)]
+    except Exception:
+        pass
+
+    try:
+        if rc_col and target_rc is not None:
+            rs = pd.to_numeric(d[rc_col], errors="coerce")
+            d = d[rs == target_rc]
+    except Exception:
+        pass
+
+    if not d.empty:
+        return d
+
+    return original
+
+def has_current_chulno_source(data):
+    """
+    현재 경주 기준 chulNo 소스가 있는지 확인.
+    body/gear/today_odds 중 현재 경주 필터 후 chulNo가 3개 이상이면 True.
+    """
+    trusted = ["body", "gear", "today_odds"]
+    for key in trusted:
+        df = data.get(key, pd.DataFrame())
+        if df is None or df.empty:
+            continue
+        f = smart_current_filter(df, key)
+        col = horse_no_col(f)
+        if col:
+            vals = pd.to_numeric(f[col], errors="coerce")
+            if vals.between(1, 14, inclusive="both").sum() >= 3:
+                return True
     return False
 
+def clean_result_for_display(result, data):
+    """
+    관망/무효 상태에서는 조합을 화면에서 숨깁니다.
+    """
+    if not result:
+        return result
+    try:
+        combo = str(result.get("공격삼쌍승", "")).replace("/", "-").strip()
+        nums = [int(x.strip()) for x in combo.split("-") if x.strip()]
+        invalid_combo = len(nums) != 3 or any(n < 1 or n > 14 for n in nums)
+    except Exception:
+        invalid_combo = True
 
-def auto_fetch_kra_once():
-    smart_auto_load_data()
-
-if auto_run_enabled and not st.session_state.auto_loaded:
-    with st.spinner("KRA 홈페이지 원본표를 자동으로 가져오고 분석 중입니다..."):
-        auto_fetch_kra_once()
-        st.session_state.auto_loaded = True
-
-st.markdown(f"""
-<div class="source-card">
-<div class="big">🤖 자동 분석 상태</div>
-<div style="font-size:17px;line-height:1.7;">
-{st.session_state.auto_analysis_status}<br>
-데이터 상태: <b>{st.session_state.source_status}</b><br>
-현재 분석 데이터: <b>{len(st.session_state.df)}행</b><br>
-자동 읽기 기록: <b>{st.session_state.auto_load_log}</b><br>
-KRA 실패 시 Google Sheet, 그다음 GitHub CSV 백업으로 자동 전환합니다.<br>
-컴퓨터가 꺼져 있어도 Streamlit Cloud와 Google Sheet 주소가 살아 있으면 휴대폰에서 작동합니다.
-</div>
-</div>
-""", unsafe_allow_html=True)
-
-evo_score = learning_evolution_score()
-st.markdown(f"""
-<div class="source-card">
-<div class="big">🧬 AI 진화 학습 상태</div>
-<div style="font-size:18px;line-height:1.8;">
-진화점수: <b>{evo_score}/100</b><br>
-오늘 자동 관찰 저장: <b>{saved_count}건</b><br>
-실제 구매 제한: <b>하루 {daily_buy_limit}회</b> / 오늘 구매 저장: <b>{st.session_state.daily_purchase_count}회</b><br>
-구매하지 않은 후보도 관찰 데이터로 저장되어 나중에 통계자료로 사용됩니다.<br>
-결과표 비교: <b>{result_msg}</b> / 관찰 자동판정: <b>{updated_obs_count}건</b>
-</div>
-</div>
-""", unsafe_allow_html=True)
-
-b1,b2,b3=st.columns(3)
-with b1:
-    if st.button("🔄 지금 다시 자동분석", type="primary", width="stretch"):
-        st.session_state.auto_loaded = False
-        auto_fetch_kra_once()
-        st.success("다시 자동분석 완료")
-        st.rerun()
-with b2:
-    if st.button("🚨 진동 알람 켜기", width="stretch"):
-        st.session_state.alarm_on=True
-        vibrate()
-        st.success("진동 알람 ON")
-with b3:
-    if st.button("🔄 샘플 복구", width="stretch"):
-        st.session_state.df=sample.copy()
-        st.session_state.source_status="샘플 데이터 복구"
-        st.session_state.auto_analysis_status="샘플 데이터 기준 분석"
+    if invalid_combo or not has_current_chulno_source(data):
+        result["판정"] = "관망"
+        result["추천금액"] = 0
+        result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
+        result["자금상태"] = "현재 경주 chulNo 부족 / 데이터 섞임 방지"
+        result["공격삼쌍승"] = "-"
+        result["방어삼복승"] = "-"
+        result["보조삼쌍승"] = "-"
+        result["예상배당"] = 0
+    return result
 
 
-data=ensure(st.session_state.df)
-data_csv_cache = df_to_csv_safe(data)
-records_csv_cache = df_to_csv_safe(st.session_state.records)
-review_csv_cache = df_to_csv_safe(st.session_state.review_records if "review_records" in st.session_state else pd.DataFrame())
-horses, combos, operation_combos, cached_summary, cached_one_line, cached_pvo = server_side_heavy_analysis_cached(
-    data_csv_cache, records_csv_cache, review_csv_cache,
-    stake, target_return, max_combos, max_daily_buys, base_stake, operation_mode
-)
-# horses already computed by server cache
+# 전역 API URL 기본값 보강
+race_url = globals().get("race_url", "")
+entry_url = globals().get("entry_url", "")
+horse_url = globals().get("horse_url", "")
+body_url = globals().get("body_url", "")
+gear_url = globals().get("gear_url", "")
+rating_url = globals().get("rating_url", "")
+odds_url = globals().get("odds_url", "")
+today_odds_url = globals().get("today_odds_url", "")
+result_detail_url = globals().get("result_detail_url", "")
+race_record_url = globals().get("race_record_url", "")
+start_exam_url = globals().get("start_exam_url", "")
+judge_url = globals().get("judge_url", "")
+jockey_change_url = globals().get("jockey_change_url", "")
+weather_alert_url = globals().get("weather_alert_url", "")
+corner_pace_url = globals().get("corner_pace_url", "")
+popularity_url = globals().get("popularity_url", "")
+first_odds_url = globals().get("first_odds_url", "")
+second_odds_url = globals().get("second_odds_url", "")
+third_odds_url = globals().get("third_odds_url", "")
 
-horses=apply_confidence_and_warnings(horses)
-horses=add_review_plus_scores(horses, data, st.session_state.review_records)
-horses=apply_confidence_and_warnings(horses)
-combos=combo_engine(horses, stake, target_return, max_combos)
-operation_combos = op_guard_combos(combos, max_daily_buys, base_stake, operation_mode)
-target_odds=round(target_return/stake,1)
-operation_combos = add_time_phase_to_combos(operation_combos) if "operation_combos" in globals() else operation_combos
-combos = add_time_phase_to_combos(combos)
-auto_recommend_saved_count = auto_save_recommendations(operation_combos if "operation_combos" in globals() and len(operation_combos) else combos, 30)
-schedule_active, watch_window_text, hot_time_combos = schedule_watch_summary(operation_combos if "operation_combos" in globals() and len(operation_combos) else combos)
 
-super_candidates = super_alert_candidates(
-    operation_combos if "operation_combos" in globals() and len(operation_combos) else combos,
-    super_alert_min_odds,
-    super_alert_min_score,
-    super_alert_max_risk,
-    3
-)
-if super_alert_enabled and len(super_candidates) and (schedule_active or not race_schedule_watch):
-    super_best = super_candidates.iloc[0]
-    render_super_alert(super_best)
-    super_alert_js(super_alert_sound)
-    if st.session_state.watch_mode_on:
-        browser_notification("MARU 특급 조합", f"{super_best.get('경마장','')} {super_best.get('경주번호','')}R {super_best.get('예상배당','')}배")
-else:
-    super_best = None
+# 샘플데이터 사용 여부 기본값 보강
+use_sample = globals().get("use_sample", False)
 
-render_watch_mode_panel(len(super_candidates) if "super_candidates" in globals() else 0)
-st.markdown(f"""
-<div class="source-card">
-<div class="big">⏰ 경주 시간대 자동 감시</div>
-<div style="font-size:18px;line-height:1.8;">
-감시 시간표: <b>{watch_window_text if 'watch_window_text' in globals() else ''}</b><br>
-현재 시간대 감시: <b>{"ON" if (schedule_active if 'schedule_active' in globals() else True) else "시간 외 OFF"}</b><br>
-30배 집중감시: <b>각 경주 출발 {high_odds_watch_min}분 전부터</b><br>
-최종확인: <b>출발 {final_watch_min}분 전</b>
-</div>
-</div>
-""", unsafe_allow_html=True)
-if 'hot_time_combos' in globals() and len(hot_time_combos):
-    st.subheader("🔥 지금 30배 이상 집중감시 시간대")
-    st.dataframe(hot_time_combos.head(10), width="stretch")
 
-st.subheader("🔗 추천문구 자동연동 / 결과문구 자동해석")
-st.markdown(f"""
-<div class="source-card">
-<div class="big">추천 자동 저장</div>
-오늘 추천문구 자동 저장: <b>{auto_recommend_saved_count if 'auto_recommend_saved_count' in globals() else 0}건</b><br>
-결과는 KRA 자동읽기가 실패해도, 결과 문구만 붙여넣으면 자동으로 1착/2착/3착/배당을 해석합니다.
-</div>
-""", unsafe_allow_html=True)
+FORCE_API_KEYS = [
+    ("race_url", "1. 경주정보 URL"),
+    ("entry_url", "2. 출전등록말 URL"),
+    ("horse_url", "3. 경주마정보 URL"),
+    ("body_url", "4. 출전마 체중 URL"),
+    ("gear_url", "5. 장구/폐출혈 URL"),
+    ("rating_url", "6. 레이팅 URL"),
+    ("odds_url", "7. 배당/매출 URL"),
+    ("today_odds_url", "8. 시행당일 배당 URL"),
+    ("result_detail_url", "9. AI 경주결과상세 URL"),
+    ("race_record_url", "10. 경주기록 URL"),
+    ("start_exam_url", "11. 출발심사 URL"),
+    ("judge_url", "12. 경주심판 URL"),
+    ("jockey_change_url", "13. 기수변경 URL"),
+    ("weather_alert_url", "14. 기상특보 URL"),
+    ("corner_pace_url", "15. 코너/주로빠르기 URL"),
+    ("popularity_url", "16. 인기투표 URL"),
+    ("first_odds_url", "17. 1착마 적중승식 URL"),
+    ("second_odds_url", "18. 2착마 적중승식 URL"),
+    ("third_odds_url", "19. 3착마 적중승식 URL"),
+]
 
-with st.expander("결과문구 붙여넣기 자동해석", expanded=False):
-    default_course_for_text = st.selectbox("기본 경마장", ["서울","부산경남","제주"], index=0, key="default_course_for_text")
-    result_text = st.text_area(
-        "결과 문구를 그대로 붙여넣기",
-        placeholder="예: 서울 1경주 5번 2번 8번 삼복승 38.5 삼쌍승 210.4",
-        height=120,
-        key="result_text_parser_area"
-    )
-    if st.button("결과문구 자동해석 → 결과표 반영", width="stretch"):
-        parsed = parse_result_text_block(result_text, default_course_for_text)
-        if len(parsed):
-            compared, obs_updated = apply_parsed_results_to_system(parsed)
-            st.success(f"결과 {len(parsed)}건 해석 완료 / 비교 {compared}건 / 관찰판정 {obs_updated}건")
-            st.dataframe(parsed, width="stretch")
+
+def force_secret_or_setting(key, default=""):
+    # 1) Streamlit session current value
+    try:
+        if key in st.session_state and st.session_state[key]:
+            return st.session_state[key]
+    except Exception:
+        pass
+
+    # 2) saved settings file
+    try:
+        if "settings" in globals() and isinstance(settings, dict):
+            if settings.get(key):
+                return settings.get(key)
+            if settings.get(key.upper()):
+                return settings.get(key.upper())
+    except Exception:
+        pass
+
+    # 3) Streamlit Secrets [maru] / top-level
+    try:
+        if "maru" in st.secrets:
+            if key in st.secrets["maru"]:
+                return st.secrets["maru"][key]
+            if key.upper() in st.secrets["maru"]:
+                return st.secrets["maru"][key.upper()]
+    except Exception:
+        pass
+
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+        if key.upper() in st.secrets:
+            return st.secrets[key.upper()]
+    except Exception:
+        pass
+
+    # 4) built-in default API URLs
+    try:
+        if key in FORCE_DEFAULT_URLS:
+            return FORCE_DEFAULT_URLS[key]
+    except Exception:
+        pass
+
+    return default
+
+def force_save_settings(payload):
+    try:
+        save_json(SETTINGS_FILE, payload)
+        return True
+    except Exception:
+        try:
+            Path("maru_settings.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
+def get_data():
+
+    # use_sample 변수 누락 방지
+    use_sample = bool(globals().get("use_sample", False))
+    try:
+        if "use_sample" in st.session_state:
+            use_sample = bool(st.session_state["use_sample"])
+    except Exception:
+        pass
+
+
+    # API URL 변수 누락 방지
+    race_url = resolve_api_url("race_url", ["RACE_URL", "race_url"])
+    entry_url = resolve_api_url("entry_url", ["ENTRY_URL", "entry_url"])
+    horse_url = resolve_api_url("horse_url", ["HORSE_URL", "horse_url"])
+    body_url = resolve_api_url("body_url", ["BODY_URL", "body_url"])
+    gear_url = resolve_api_url("gear_url", ["GEAR_URL", "gear_url"])
+    rating_url = resolve_api_url("rating_url", ["RATING_URL", "rating_url"])
+    odds_url = resolve_api_url("odds_url", ["ODDS_URL", "odds_url"])
+    today_odds_url = resolve_api_url("today_odds_url", ["TODAY_ODDS_URL", "today_odds_url"])
+    result_detail_url = resolve_api_url("result_detail_url", ["RESULT_DETAIL_URL", "result_detail_url"])
+    race_record_url = resolve_api_url("race_record_url", ["RACE_RECORD_URL", "race_record_url"])
+    start_exam_url = resolve_api_url("start_exam_url", ["START_EXAM_URL", "start_exam_url"])
+    judge_url = resolve_api_url("judge_url", ["JUDGE_URL", "judge_url"])
+    jockey_change_url = resolve_api_url("jockey_change_url", ["JOCKEY_CHANGE_URL", "jockey_change_url"])
+    weather_alert_url = resolve_api_url("weather_alert_url", ["WEATHER_ALERT_URL", "weather_alert_url"])
+    corner_pace_url = resolve_api_url("corner_pace_url", ["CORNER_PACE_URL", "corner_pace_url"])
+    popularity_url = resolve_api_url("popularity_url", ["POPULARITY_URL", "popularity_url"])
+    first_odds_url = resolve_api_url("first_odds_url", ["FIRST_ODDS_URL", "first_odds_url"])
+    second_odds_url = resolve_api_url("second_odds_url", ["SECOND_ODDS_URL", "second_odds_url"])
+    third_odds_url = resolve_api_url("third_odds_url", ["THIRD_ODDS_URL", "third_odds_url"])
+
+    urls = {
+        "race":race_url,
+        "entry":entry_url,
+        "horse":horse_url,
+        "body":body_url,
+        "gear":gear_url,
+        "rating":rating_url,
+        "odds":odds_url,
+        "today_odds":today_odds_url,
+        "result_detail":result_detail_url,
+        "race_record":race_record_url,
+        "start_exam":start_exam_url,
+        "judge":judge_url,
+        "jockey_change":jockey_change_url,
+        "weather_alert":weather_alert_url,
+        "corner_pace":corner_pace_url,
+        "popularity":popularity_url,
+        "first_odds":first_odds_url,
+        "second_odds":second_odds_url,
+        "third_odds":third_odds_url,
+    }
+    data = {}
+    errors = []
+    for name, url in urls.items():
+        df, err = fetch_api(url)
+        df = smart_current_filter(df, name)
+        data[name] = smart_current_filter(df, name)
+        if err:
+            errors.append(f"{name}:{err}")
+
+    if bool(globals().get('use_sample', locals().get('use_sample', False))) and data.get("entry", pd.DataFrame()).empty and data.get("horse", pd.DataFrame()).empty:
+        race, horse, risk = sample_data()
+        data["race"] = race
+        data["entry"] = horse
+        data["horse"] = horse
+        data["start_exam"] = risk
+
+    return data, fetch_env(), errors
+
+
+
+
+
+
+def horse_no_col(df):
+    """
+    실제 구매용 마번 컬럼만 사용합니다.
+    enNo/hrNo/age/rcNo/meet/rating/chaksun 등은 절대 마번으로 쓰지 않습니다.
+    """
+    if df is None or df.empty:
+        return None
+
+    allowed_exact = ["chulNo", "chulno", "chul_no", "출전번호", "출전마번", "마번"]
+    banned_words = ["enno", "hrno", "horseno", "age", "rcno", "meet", "rating", "chaksun", "prize", "amt"]
+
+    for key in allowed_exact:
+        for c in df.columns:
+            if str(c).lower() == key.lower():
+                vals = pd.to_numeric(df[c], errors="coerce")
+                if vals.between(1, 14, inclusive="both").sum() >= 3:
+                    return c
+
+    for c in df.columns:
+        cl = str(c).lower()
+        if any(b in cl for b in banned_words):
+            continue
+        if "chul" in cl or "출전" in cl or "마번" in cl:
+            vals = pd.to_numeric(df[c], errors="coerce")
+            if vals.between(1, 14, inclusive="both").sum() >= 3:
+                return c
+
+    return None
+
+def normalize_horse(df):
+    if df.empty:
+        return df
+    d = df.copy()
+    c = horse_no_col(d)
+
+    if c:
+        d["마번"] = pd.to_numeric(d[c], errors="coerce")
+
+    # 0/고유번호/결측 제거 가능하도록 NaN 처리
+    if "마번" in d.columns:
+        d["마번"] = pd.to_numeric(d["마번"], errors="coerce")
+        d.loc[~d["마번"].between(1, 30, inclusive="both"), "마번"] = pd.NA
+
+    return d
+
+def make_unique_columns(df):
+    """
+    API마다 같은 컬럼명이 반복될 때 pandas merge 오류를 막기 위해
+    중복 컬럼명을 자동으로 고유하게 바꿉니다.
+    """
+    if df.empty:
+        return df
+    cols = []
+    seen = {}
+    for c in df.columns:
+        c = str(c)
+        if c not in seen:
+            seen[c] = 0
+            cols.append(c)
         else:
-            st.warning("해석된 결과가 없습니다. 예: 1경주 5번 2번 8번 삼복승 38.5 삼쌍승 210.4")
+            seen[c] += 1
+            cols.append(f"{c}_{seen[c]}")
+    df = df.copy()
+    df.columns = cols
+    return df
 
-with st.expander("자동 저장된 추천문구 보기", expanded=False):
-    st.dataframe(st.session_state.auto_recommend_text_log.tail(100), width="stretch")
+def merge_horse(base, df, source_name="api"):
+    """
+    여러 API 데이터를 마번 기준으로 합칩니다.
+    겹치는 컬럼은 source_name을 붙여서 MergeError를 방지합니다.
+    """
+    if base.empty or df.empty:
+        return base
 
-if st.session_state.watch_mode_on:
-    watch_mode_js(watch_check_sec, watch_keep_awake, watch_auto_stop_min)
-summary = op_today_summary(horses, combos, target_odds, max_daily_buys)
-st.markdown(f"""
-<div class="source-card"><div class="big">📌 오늘 자동 요약</div>
-<div style="font-size:18px;line-height:1.8;">
-오늘 경주 수: <b>{summary['오늘 경주 수']}경주</b> / 30배 후보: <b>{summary['30배 후보']}개</b> / A등급 후보: <b>{summary['A등급 후보']}두</b><br>
-빨간경고 경주: <b>{summary['빨간경고 경주']}개</b> / 추천 구매 수: <b>{summary['추천 구매 수']}개</b> / 하루 제한: <b>{summary['하루 제한']}개</b><br>
-오늘 판단: <b>{summary['오늘 판단']}</b>
-</div></div>
-""", unsafe_allow_html=True)
+    base = make_unique_columns(base.copy())
+    d = make_unique_columns(df.copy())
 
-best_source = operation_combos[operation_combos["운영판정"] == "✅ 오늘 추천"] if "operation_combos" in globals() and len(operation_combos) else combos
-best = best_source.iloc[0] if len(best_source) else (combos.iloc[0] if len(combos) else None)
-if best is not None and best["판정"]!="⛔ 보류":
-    if st.session_state.alarm_on or auto_alarm_enabled: vibrate()
-    st.markdown(f"""
-    <div class="best-card">
-    <div class="big">{best['판정']} 발견</div>
-    <div style="font-size:18px;line-height:1.7;">
-    경마장: <b>{best['경마장']}</b> / 경주: <b>{int(best['경주번호'])}R / {best['출발시간']}</b><br>
-    방식: <b>{best['방식']}</b><br>
-    1착: <b>{best['1착']}</b><br>
-    2착: <b>{best['2착']}</b><br>
-    3착: <b>{best['3착']}</b><br>
-    예상배당: <b>{best['예상배당']}배</b> / 예상환급: <b>{int(best['예상환급']):,}원</b><br>
-    신뢰등급: <b>{best['신뢰등급']}</b> / 인기마 제거: <b>{best['인기마제거판정']}</b><br>
-확신도는 아래 `확신도·경고` 탭에서 말별로 확인
-    </div></div>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown('<div class="alert-card"><div class="alert-big">⛔ 실전 조합 부족</div><div>30배 이상 근거가 부족합니다. KRA 원본 또는 CSV를 넣고 다시 분석하세요.</div></div>', unsafe_allow_html=True)
+    base = normalize_horse(base)
+    d = normalize_horse(d)
 
-st.markdown(f'<a class="buy-link" href="{official}" target="_blank">📱 KRA 공식 구매/확인 페이지 열기</a>', unsafe_allow_html=True)
+    if "마번" not in base.columns or "마번" not in d.columns:
+        return base
 
-if best is not None:
-    st.subheader("10초 수동구매 메모")
-    st.code(f"""[MARU 최종실전]
-판정: {best['판정']}
-경마장: {best['경마장']} / {int(best['경주번호'])}R / {best['출발시간']}
-방식: {best['방식']}
-1착: {best['1착']}
-2착: {best['2착']}
-3착: {best['3착']}
-필요배당: {target_odds}배
-예상배당: {best['예상배당']}배
-예상환급: {int(best['예상환급']):,}원
-신뢰등급: {best['신뢰등급']}
-인기마제거: {best['인기마제거판정']}
-공식 페이지에서 직접 확인 후 수동구매""")
+    try:
+        d = d.drop_duplicates(subset=["마번"], keep="first")
+    except Exception:
+        pass
 
-    r1,r2,r3=st.columns(3)
-    with r1:
-        if st.button("✅ 적중 기록", width="stretch"):
-            st.session_state.records=pd.concat([st.session_state.records,pd.DataFrame([{"날짜":pd.Timestamp.today().strftime("%Y-%m-%d"),"시간":best["출발시간"],"경마장":best["경마장"],"경주":f"{int(best['경주번호'])}R","발견":best["판정"],"결과":"적중","수익":int(best["예상순수익"]),"방식":best["방식"],"조합":best["메모"],"예상배당":best["예상배당"],"공통요인":"체중 안정|출전간격 안정|최근 순위 상승"}])], ignore_index=True)
-            st.success("적중 기록 저장")
-    with r2:
-        if st.button("❌ 실패 기록", width="stretch"):
-            st.session_state.records=pd.concat([st.session_state.records,pd.DataFrame([{"날짜":pd.Timestamp.today().strftime("%Y-%m-%d"),"시간":best["출발시간"],"경마장":best["경마장"],"경주":f"{int(best['경주번호'])}R","발견":best["판정"],"결과":"실패","수익":-int(best["투자금"]),"방식":best["방식"],"조합":best["메모"],"예상배당":best["예상배당"],"공통요인":"외곽게이트|정확순서 실패"}])], ignore_index=True)
-            st.warning("실패 기록 저장")
-    with r3:
-        if st.button("👀 보류 기록", width="stretch"):
-            st.session_state.records=pd.concat([st.session_state.records,pd.DataFrame([{"날짜":pd.Timestamp.today().strftime("%Y-%m-%d"),"시간":best["출발시간"],"경마장":best["경마장"],"경주":f"{int(best['경주번호'])}R","발견":best["판정"],"결과":"보류","수익":0,"방식":best["방식"],"조합":best["메모"],"예상배당":best["예상배당"],"공통요인":"보류"}])], ignore_index=True)
-            st.info("보류 기록 저장")
+    rename_map = {}
+    for c in d.columns:
+        if c != "마번" and c in base.columns:
+            rename_map[c] = f"{c}_{source_name}"
+    if rename_map:
+        d = d.rename(columns=rename_map)
 
-invested, returned, profit, roi = roi_summary(st.session_state.records)
-m1,m2,m3,m4=st.columns(4)
-m1.metric("필요배당", f"{target_odds}배")
-m2.metric("30배 후보", f"{int((combos['예상배당']>=target_odds).sum()) if len(combos) else 0}개")
-m3.metric("총 회수", f"{returned:,}원")
-m4.metric("ROI", f"{roi}%")
+    try:
+        return base.merge(d, on="마번", how="left")
+    except Exception:
+        return base
+
+def num(df, names, default):
+    for c in names:
+        if c in df.columns:
+            return pd.to_numeric(df[c], errors="coerce").fillna(default)
+    return pd.Series([default] * len(df), index=df.index)
+
+def budget_status():
+    df = read_table(RESULT_FILE)
+    if df.empty:
+        return {"today_bet":0, "today_profit":0, "total_profit":0, "entries":0, "locked":False, "reason":"정상"}
+    if "저장시각" in df.columns:
+        df["날짜"] = pd.to_datetime(df["저장시각"], errors="coerce").dt.strftime("%Y-%m-%d")
+    else:
+        df["날짜"] = ""
+    for c in ["투입금", "환급금"]:
+        if c not in df.columns:
+            df[c] = 0
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    tdf = df[df["날짜"] == today()]
+    today_bet = float(tdf["투입금"].sum())
+    today_return = float(tdf["환급금"].sum())
+    today_profit = today_return - today_bet
+    total_profit = float(df["환급금"].sum() - df["투입금"].sum())
+    entries = int((tdf["투입금"] > 0).sum())
+    locked = False
+    reason = "정상"
+    if today_profit <= -float(daily_loss_limit):
+        locked = True
+        reason = f"하루 손실 {int(daily_loss_limit):,}원 도달"
+    elif entries >= int(daily_entries_limit):
+        locked = True
+        reason = f"하루 {int(daily_entries_limit)}회 완료"
+    elif today_bet >= float(daily_budget):
+        locked = True
+        reason = f"하루 {int(daily_budget):,}원 한도 도달"
+    return {"today_bet":today_bet, "today_profit":today_profit, "total_profit":total_profit, "entries":entries, "locked":locked, "reason":reason}
 
 
-def op_has_text(v, text):
-    return text in str(v)
+def current_race_ready(result):
+    """
+    현재 경주번호/출발시간이 비어 있거나 조합이 이상하면 실전 추천/저장을 막습니다.
+    """
+    if not result:
+        return False
+    rc = str(result.get("경주번호", "")).strip()
+    combo = str(result.get("공격삼쌍승", "")).strip()
+    if rc in ["", "-", "nan", "None"]:
+        return False
+    parts = [p.strip() for p in combo.replace("/", "-").split("-")]
+    if len(parts) != 3:
+        return False
+    try:
+        nums = [int(p) for p in parts]
+        # 일반 경주 마번 범위 안전장치. 15번 이상은 데이터 섞임 가능성으로 관망 처리.
+        if not all(1 <= n <= 14 for n in nums):
+            return False
+    except Exception:
+        return False
+    return True
 
-def op_auto_stake(row, base_stake=10000, mode="균형형"):
-    score = pd.to_numeric(row.get("조합점수", 0), errors="coerce")
-    odds = pd.to_numeric(row.get("예상배당", 0), errors="coerce")
-    risk = pd.to_numeric(row.get("위험합계", 0), errors="coerce")
-    if pd.isna(score): score = 0
-    if pd.isna(odds): odds = 0
-    if pd.isna(risk): risk = 0
-    grade = str(row.get("신뢰등급", ""))
-    mult = 1.0 if ("A등급" in grade or score >= 84) else 0.5 if ("B등급" in grade or score >= 74) else 0
-    if risk >= 4: mult *= 0.5
-    if odds >= 120: mult *= 0.5
-    if mode == "안전형": mult *= 0.7
-    if mode == "공격형": mult *= 1.2
-    amount = int(round(base_stake * mult / 1000) * 1000)
-    return amount if amount >= 1000 else 0
 
-def op_is_hold_combo(row):
-    text = " ".join(str(row.get(k, "")) for k in ["신뢰등급","인기마제거판정","메모","판정"])
-    risk = pd.to_numeric(row.get("위험합계", 0), errors="coerce")
-    if pd.isna(risk): risk = 0
-    return risk >= 5 or "보류" in text or "배당 죽음" in text
+def hub_headers(title):
+    common_time = ["저장시각","날짜","경마장","경주번호"]
+    if title == "api_status":
+        return common_time + ["API","행수","컬럼수","마번후보","상태"]
+    if title == "score_snapshots":
+        return common_time + ["마번","마명","점수","순위","근거"]
+    if title == "hub_status":
+        return ["저장시각","날짜","경마장","경주번호","연결데이터","추천","판정","상태"]
+    if title == "recommendations":
+        return ["저장시각","날짜","경마장","경주번호","출발시간","판정","공격삼쌍승","방어삼복승","보조삼쌍승","예상배당","신뢰도","추천금액","오늘손익","누적손익","날씨","주로","모래","바람"]
+    if title == "comparisons":
+        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","실제삼쌍","실제삼복","투입금","환급금","수익률","분석결과","메모"]
+    if title == "results":
+        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","투입금","환급금","수익률","분석결과","메모"]
+    return ["저장시각","내용"]
 
-def op_guard_combos(combos_df, max_buys=2, base_stake=10000, mode="균형형"):
-    if combos_df is None or len(combos_df) == 0:
+def safe_target_date():
+    try:
+        return str(target_date)
+    except Exception:
+        return today()
+
+def safe_target_rc():
+    try:
+        return int(target_rc_no)
+    except Exception:
+        try:
+            return result.get("경주번호","")
+        except Exception:
+            return ""
+
+def hub_append(title, row):
+    if not sheets_enabled():
+        return False, "Google Sheets 미설정"
+    return append_sheet_row(title, row, hub_headers(title))
+
+def hub_sync_now(data, score_df, result):
+    """
+    실시간 API 수집 결과와 분석 결과를 허브에 저장.
+    같은 실행에서 같은 추천은 중복 저장하지 않도록 session_state key 사용.
+    """
+    if not sheets_enabled():
+        return False, "Google Sheets 미설정"
+
+    now = now_kst_str()
+    d = safe_target_date()
+    rc = safe_target_rc()
+    try:
+        place = track_place
+    except Exception:
+        place = ""
+
+    try:
+        total_rows = sum(len(v) for v in data.values() if v is not None)
+    except Exception:
+        total_rows = 0
+
+    rec = ""
+    judge = ""
+    try:
+        rec = result.get("공격삼쌍승","")
+        judge = result.get("판정","")
+    except Exception:
+        pass
+
+    sync_key = hashlib.md5(f"{d}-{place}-{rc}-{total_rows}-{rec}-{judge}".encode("utf-8")).hexdigest()
+    if st.session_state.get("_hub_last_sync_key") == sync_key:
+        return True, "이미 동기화됨"
+
+    # 1. API 연결 상태 저장
+    for k, v in data.items():
+        try:
+            rows = len(v) if v is not None else 0
+            cols = len(v.columns) if v is not None and not v.empty else 0
+            hcol = ""
+            try:
+                hcol = str(horse_no_col(v)) if v is not None and not v.empty else ""
+            except Exception:
+                hcol = ""
+            hub_append("api_status", {
+                "저장시각": now, "날짜": d, "경마장": place, "경주번호": rc,
+                "API": k, "행수": rows, "컬럼수": cols, "마번후보": hcol,
+                "상태": "OK" if rows > 0 else "EMPTY"
+            })
+        except Exception:
+            pass
+
+    # 2. 말별 점수 상위 저장
+    try:
+        if score_df is not None and not score_df.empty:
+            tmp = score_df.copy().head(30)
+            for idx, r in tmp.iterrows():
+                row = {
+                    "저장시각": now, "날짜": d, "경마장": place, "경주번호": rc,
+                    "마번": r.get("마번",""),
+                    "마명": r.get("마명",""),
+                    "점수": r.get("점수", r.get("score","")),
+                    "순위": int(idx) + 1,
+                    "근거": r.get("근거", r.get("reason",""))
+                }
+                hub_append("score_snapshots", row)
+    except Exception:
+        pass
+
+    # 3. 허브 상태 저장
+    hub_append("hub_status", {
+        "저장시각": now, "날짜": d, "경마장": place, "경주번호": rc,
+        "연결데이터": total_rows, "추천": rec, "판정": judge, "상태": "SYNCED"
+    })
+
+    st.session_state["_hub_last_sync_key"] = sync_key
+    return True, "허브 동기화 완료"
+
+def hub_read_recent(title, limit=100):
+    if not sheets_enabled():
         return pd.DataFrame()
-    c = combos_df.copy()
-    c["자동투자금"] = c.apply(lambda r: op_auto_stake(r, base_stake, mode), axis=1)
-    c["운영판정"] = c.apply(lambda r: "⛔ 제외" if r["자동투자금"] <= 0 or op_is_hold_combo(r) else "✅ 오늘 추천" if str(r.get("판정","")).startswith(("🔥","💰","🚀")) else "👀 관찰", axis=1)
-    c["우선순위점수"] = (pd.to_numeric(c.get("조합점수", 0), errors="coerce").fillna(0)*0.65 + pd.to_numeric(c.get("예상배당", 0), errors="coerce").fillna(0).clip(0,80)*0.25 - pd.to_numeric(c.get("위험합계", 0), errors="coerce").fillna(0)*4).round(1)
-    valid = c[c["운영판정"] == "✅ 오늘 추천"].sort_values("우선순위점수", ascending=False)
-    keep = set(valid.head(max_buys).index)
-    c.loc[(c["운영판정"] == "✅ 오늘 추천") & (~c.index.isin(keep)), "운영판정"] = "👀 과다방지 관찰"
-    return c.sort_values(["운영판정","우선순위점수"], ascending=[True, False])
+    df, err = df_from_worksheet(title, hub_headers(title))
+    if df is None or df.empty:
+        return pd.DataFrame()
+    return df.tail(limit)
 
-def op_today_summary(horses_df, combos_df, target_odds, max_buys):
-    races = int(horses_df[["경마장","경주번호"]].drop_duplicates().shape[0]) if horses_df is not None and len(horses_df) else 0
-    over30 = int((pd.to_numeric(combos_df.get("예상배당", pd.Series(dtype=float)), errors="coerce") >= target_odds).sum()) if combos_df is not None and len(combos_df) else 0
-    grade_col = "확신등급" if horses_df is not None and "확신등급" in horses_df.columns else "최종판정"
-    a_horses = int(horses_df[grade_col].astype(str).str.contains("A등급", na=False).sum()) if horses_df is not None and len(horses_df) and grade_col in horses_df.columns else 0
-    red_races = 0
-    if horses_df is not None and len(horses_df) and "빨간경고수" in horses_df.columns:
-        tmp = horses_df.copy(); tmp["빨간경고수"] = pd.to_numeric(tmp["빨간경고수"], errors="coerce").fillna(0)
-        red_races = int(tmp.groupby(["경마장","경주번호"])["빨간경고수"].max().ge(3).sum())
-    op = op_guard_combos(combos_df, max_buys, base_stake if "base_stake" in globals() else 10000, operation_mode if "operation_mode" in globals() else "균형형")
-    recommended = int((op["운영판정"] == "✅ 오늘 추천").sum()) if len(op) else 0
-    conclusion = "🔥 실전 가능" if recommended and a_horses else "💰 소액/관찰" if over30 else "⛔ 관망"
-    return {"오늘 경주 수":races,"30배 후보":over30,"A등급 후보":a_horses,"빨간경고 경주":red_races,"추천 구매 수":recommended,"하루 제한":max_buys,"오늘 판단":conclusion}
 
-def op_race_lines(horses_df, combos_df, target_odds):
-    rows=[]
-    if horses_df is None or len(horses_df)==0: return pd.DataFrame(rows)
-    for (course, race_no), g in horses_df.groupby(["경마장","경주번호"]):
-        rc = combos_df[(combos_df["경마장"]==course)&(combos_df["경주번호"]==race_no)] if combos_df is not None and len(combos_df) else pd.DataFrame()
-        over30 = int((pd.to_numeric(rc.get("예상배당", pd.Series(dtype=float)), errors="coerce")>=target_odds).sum()) if len(rc) else 0
-        grade_col = "확신등급" if "확신등급" in g.columns else "최종판정"
-        a = int(g[grade_col].astype(str).str.contains("A등급", na=False).sum()) if grade_col in g.columns else 0
-        risk = int(pd.to_numeric(g.get("빨간경고수", pd.Series([0]*len(g))), errors="coerce").fillna(0).max())
-        pace = str(g.get("페이스예상", pd.Series([""])).iloc[0]) if "페이스예상" in g.columns else ""
-        adv = str(g.get("페이스유리", pd.Series([""])).iloc[0]) if "페이스유리" in g.columns else ""
-        if over30 and a and risk < 3: line=f"{course} {int(race_no)}R: {pace} / {adv} → 30배 후보 있음, 실전 후보"
-        elif risk >= 3: line=f"{course} {int(race_no)}R: 빨간경고 많음 → 보류"
-        elif over30: line=f"{course} {int(race_no)}R: 30배 후보는 있으나 A등급 부족 → 소액/관찰"
-        else: line=f"{course} {int(race_no)}R: 30배 후보 부족 → 관망"
-        rows.append({"경주":f"{course} {int(race_no)}R","한줄결론":line,"30배후보":over30,"A등급":a,"위험":risk})
+# 분석/거리 변수 기본값 보강
+distance_type = globals().get("distance_type", "중거리")
+race_distance = globals().get("race_distance", 1200)
+pace_type = globals().get("pace_type", "보통")
+track_bias = globals().get("track_bias", "없음")
+
+def env_bonus(row, env):
+    distance_type = globals().get("distance_type", "중거리")
+    race_distance = globals().get("race_distance", 1200)
+    pace_type = globals().get("pace_type", "보통")
+    track_bias = globals().get("track_bias", "없음")
+    try:
+        distance_type = st.session_state.get("distance_type", distance_type)
+        race_distance = st.session_state.get("race_distance", race_distance)
+        pace_type = st.session_state.get("pace_type", pace_type)
+        track_bias = st.session_state.get("track_bias", track_bias)
+    except Exception:
+        pass
+
+    front = float(row.get("선행력", 70))
+    late = float(row.get("추입력", 70))
+    power = float(row.get("파워", 70))
+    speed = float(row.get("순발력", 70))
+    wet = float(row.get("습주로", 70))
+    sandfit = float(row.get("모래적응", 70))
+    b = 0
+    if env["weather"] in ["비", "눈"] or env["track"] in ["다습", "포화", "불량"]:
+        b += (wet - 70) * 0.13 + (power - 70) * 0.08
+    else:
+        b += (speed - 70) * 0.10 + (front - 70) * 0.06
+    if env["sand"] == "무거움":
+        b += (sandfit - 70) * 0.12
+    if env["wind"] == "맞바람":
+        b += (late - 70) * 0.07 - (front - 75) * 0.04
+    if distance_type == "단거리":
+        b += (speed - 70) * 0.09 + (front - 70) * 0.08
+    elif distance_type == "장거리":
+        b += (power - 70) * 0.08 + (late - 70) * 0.07
+    return round(b, 1)
+
+
+
+
+
+def build_candidate_base_from_all(data):
+    """
+    현재 선택 경주에서 신뢰 가능한 chulNo 소스만 모아 출전마 후보표를 만듭니다.
+    entry의 enNo/hrNo, horse 기본정보는 사용하지 않습니다.
+    """
+    priority_keys = ["body", "gear", "today_odds"]
+    nums = set()
+    names = {}
+
+    for key in priority_keys:
+        df = data.get(key, pd.DataFrame())
+        if df is None or df.empty:
+            continue
+
+        tmp = smart_current_filter(df, key)
+        no_col = horse_no_col(tmp)
+        if not no_col:
+            continue
+
+        tmp = tmp.copy()
+        tmp["_tmp_no"] = pd.to_numeric(tmp[no_col], errors="coerce")
+        tmp = tmp[tmp["_tmp_no"].between(1, 14, inclusive="both")]
+
+        for _, r in tmp.iterrows():
+            n = int(r["_tmp_no"])
+            nums.add(n)
+            for name_col in ["hrName", "마명", "horseName", "hr_name", "rcName"]:
+                if name_col in tmp.columns and pd.notna(r.get(name_col, None)):
+                    names[n] = str(r.get(name_col))
+                    break
+
+    if len(nums) >= 3:
+        return pd.DataFrame([{"마번": n, "마명": names.get(n, f"{n}번")} for n in sorted(nums)])
+
+    return pd.DataFrame()
+
+
+# 기타 분석 변수 기본값 보강
+sim_count = globals().get("sim_count", 100)
+daily_loss_stop = globals().get("daily_loss_stop", 30000)
+daily_entries_limit = globals().get("daily_entries_limit", 3)
+auto_save_reco = globals().get("auto_save_reco", True)
+
+def analyze(data, env):
+    base = normalize_horse(data.get("entry", pd.DataFrame()))
+    if not base.empty and "마번" in base.columns:
+        base = base[pd.to_numeric(base["마번"], errors="coerce").between(1, 30, inclusive="both")].copy()
+
+    if base.empty:
+        base = build_candidate_base_from_all(data)
+
+    if base.empty:
+        return pd.DataFrame(), {
+            "경마장": track_place,
+            "경주번호": "-",
+            "출발시간": "-",
+            "판정": "관망",
+            "공격삼쌍승": "출전마 번호 인식 실패",
+            "방어삼복승": "-",
+            "보조삼쌍승": "-",
+            "놓치기아까운1": "",
+            "놓치기아까운2": "",
+            "예상배당": 0,
+            "신뢰도": 0,
+            "추천금액": 0,
+            "오늘투입": int(budget_status().get("today_bet",0)),
+            "오늘손익": int(budget_status().get("today_profit",0)),
+            "누적손익": int(budget_status().get("total_profit",0)),
+            "오늘진입": int(budget_status().get("entries",0)),
+            "자금상태": "출전마 번호 인식 실패",
+            "기상특보위험": 0,
+        }, []
+
+    for key in ["horse","body","gear","rating","odds","today_odds","start_exam","judge","jockey_change","corner_pace","popularity","first_odds","second_odds","third_odds"]:
+        base = merge_horse(base, data.get(key, pd.DataFrame()), key)
+
+    if "마번" not in base.columns:
+        base["마번"] = range(1, len(base) + 1)
+
+    base["마번"] = pd.to_numeric(base["마번"], errors="coerce")
+    base = base[base["마번"].between(1, 30, inclusive="both")].copy()
+    base["마번"] = base["마번"].astype(int)
+    base = base.drop_duplicates(subset=["마번"], keep="first")
+
+    if base.empty or len(base["마번"].unique()) < 3:
+        return pd.DataFrame(), {
+            "경마장": track_place,
+            "경주번호": "-",
+            "출발시간": "-",
+            "판정": "관망",
+            "공격삼쌍승": "출전마 3두 이상 필요",
+            "방어삼복승": "-",
+            "보조삼쌍승": "-",
+            "놓치기아까운1": "",
+            "놓치기아까운2": "",
+            "예상배당": 0,
+            "신뢰도": 0,
+            "추천금액": 0,
+            "오늘투입": int(budget_status().get("today_bet",0)),
+            "오늘손익": int(budget_status().get("today_profit",0)),
+            "누적손익": int(budget_status().get("total_profit",0)),
+            "오늘진입": int(budget_status().get("entries",0)),
+            "자금상태": "출전마 번호 부족",
+            "기상특보위험": 0,
+        }, []
+
+    h = base.copy()
+
+    recent = num(h, ["최근순위", "최근성적", "rank", "ord", "착순"], 5)
+    win = num(h, ["승률", "winRate"], 10)
+    place = num(h, ["복승률", "placeRate"], 25)
+    rating = num(h, ["레이팅", "rating", "rt"], 65)
+    delta = num(h, ["레이팅변화", "ratingDelta"], 0)
+    weight = num(h, ["부담중량", "weight", "wgBudam"], 55)
+    odds = num(h, ["예상배당", "배당", "odds", "winOdds", "단승배당", "확정배당률"], 12)
+    srisk = num(h, ["출발위험", "startRisk"], 0)
+    rrisk = num(h, ["주행위험", "runRisk"], 0)
+    corner_rank = num(h, ["코너순위", "cornerRank", "passRank", "통과순위", "코너통과순위"], 5)
+    late_gain = num(h, ["4코너상승", "cornerGain", "추입상승", "순위상승"], 0)
+    pace_fast = num(h, ["주로빠르기", "trackSpeed", "paceSpeed", "빠르기"], 0)
+    popularity = num(h, ["인기", "popularity", "인기순위", "인기투표순위"], 5)
+
+    h["환경보정"] = h.apply(lambda r: env_bonus(r, env), axis=1)
+    h["코너보정"] = (10 - corner_rank.clip(1, 10)) * 0.9 + late_gain.clip(-5, 5) * 1.2 + pace_fast.clip(-5, 5) * 0.7
+    h["인기보정"] = (10 - popularity.clip(1, 10)) * 0.55
+
+    h["최종점수"] = (
+        (10 - recent.clip(1, 10)) * weights["recent"]
+        + win.clip(0, 50) * weights["win_rate"]
+        + place.clip(0, 80) * weights["place_rate"]
+        + (rating.clip(40, 100) - 40) * weights["rating"]
+        + delta.clip(-10, 10) * weights["rating_delta"]
+        + odds.clip(1, 100).apply(lambda x: 12 if 6 <= x <= 25 else (7 if 25 < x <= 45 else 2)) * weights["odds_value"]
+        + h["환경보정"] * weights["environment"]
+        + h["코너보정"]
+        + h["인기보정"]
+        - (weight - 54).clip(lower=0) * weights["weight_penalty"]
+        - (srisk * 2 + rrisk * 1.5) * weights["risk_penalty"]
+    )
+
+    weather_alert_df = data.get("weather_alert", pd.DataFrame())
+    alert_risk = 0
+    if not weather_alert_df.empty:
+        alert_text = " ".join(weather_alert_df.astype(str).head(20).values.flatten().tolist())
+        if any(x in alert_text for x in ["강풍","호우","대설","폭염","한파","주의보","경보"]):
+            alert_risk = 1
+
+    volatility = 5.5
+    if env["weather"] in ["비", "눈"]:
+        volatility += 1.8
+    if env["wind"] in ["맞바람", "측풍"]:
+        volatility += 0.8
+    if alert_risk:
+        volatility += 1.2
+    if risk_mode == "안전형":
+        volatility *= 0.9
+    elif risk_mode == "공격형":
+        volatility *= 1.15
+
+    nums = [int(x) for x in h["마번"].tolist() if pd.notna(x) and 1 <= int(x) <= 30]
+    h = h[pd.to_numeric(h["마번"], errors="coerce").between(1, 30, inclusive="both")].copy()
+    scores = h["최종점수"].tolist()
+    counter = Counter()
+    random.seed(42)
+    for _ in range(sim_count):
+        noisy = [(n, s + random.gauss(0, volatility)) for n, s in zip(nums, scores)]
+        top = tuple(str(x[0]) for x in sorted(noisy, key=lambda x: x[1], reverse=True)[:3])
+        counter[top] += 1
+
+    combos = counter.most_common(10)
+    top = combos[0][0]
+    confidence = min(95, max(35, round(combos[0][1] / sim_count * 100 + 48)))
+
+    if confidence >= 75:
+        decision = "소액 공격"
+    elif confidence >= 62:
+        decision = "소액 가능"
+    else:
+        decision = "관망"
+
+    b = budget_status()
+    remaining = max(0, float(daily_budget) - b["today_bet"])
+    unlocked = b["total_profit"] >= profit_unlock or bankroll >= profit_unlock
+
+    if b["locked"] or remaining <= 0:
+        decision = "투자금지"
+        amount = 0
+    elif decision == "관망":
+        amount = 0
+    else:
+        amount = int(min(10000 if unlocked else unit_bet, remaining))
+
+    race = data.get("race", pd.DataFrame()).iloc[0].to_dict() if not data.get("race", pd.DataFrame()).empty else {}
+    result = {
+        "경마장": race.get("경마장", track_place),
+        "경주번호": race.get("경주번호", "-"),
+        "출발시간": race.get("출발시간", "-"),
+        "판정": decision,
+        "공격삼쌍승": " - ".join(top),
+        "방어삼복승": " / ".join(top),
+        "보조삼쌍승": " - ".join(combos[1][0]) if len(combos) > 1 else " - ".join(top),
+        "놓치기아까운1": " - ".join(combos[2][0]) if len(combos) > 2 else "",
+        "놓치기아까운2": " - ".join(combos[3][0]) if len(combos) > 3 else "",
+        "예상배당": round(float(odds.head(3).sum() * 0.9), 1) if len(odds) >= 3 else 46.8,
+        "신뢰도": confidence,
+        "추천금액": amount,
+        "오늘투입": int(b["today_bet"]),
+        "오늘손익": int(b["today_profit"]),
+        "누적손익": int(b["total_profit"]),
+        "오늘진입": int(b["entries"]),
+        "자금상태": b["reason"],
+        "기상특보위험": alert_risk,
+    }
+
+    combo_rows = [{"조합":" - ".join(k), "반복횟수":v, "비율":round(v / sim_count * 100, 1)} for k, v in combos]
+    return h.sort_values("최종점수", ascending=False), result, combo_rows
+
+c1, c2 = st.columns(2)
+if c1.button("데이터 불러오기", use_container_width=True):
+    st.session_state["data"], st.session_state["env"], st.session_state["errors"] = get_data()
+if c2.button("시뮬레이션", use_container_width=True):
+    st.session_state["data"], st.session_state["env"], st.session_state["errors"] = get_data()
+
+if "data" not in st.session_state:
+    st.session_state["data"], st.session_state["env"], st.session_state["errors"] = get_data()
+
+data = st.session_state["data"]
+env = st.session_state["env"]
+errors = st.session_state["errors"]
+
+
+def valid_chulno_base(data):
+    trusted = ["body", "gear", "today_odds"]
+    nums = {}
+    evidence = {}
+
+    for key in trusted:
+        df = data.get(key, pd.DataFrame())
+        if df is None or df.empty:
+            continue
+
+        try:
+            tmp = smart_current_filter(df, key)
+        except Exception:
+            tmp = df.copy()
+
+        if tmp is None or tmp.empty:
+            continue
+
+        chul_cols = []
+        for c in tmp.columns:
+            cl = str(c).lower()
+            if cl == "chulno" or str(c) in ["chulNo", "출전번호", "출전마번", "마번"]:
+                chul_cols.append(c)
+
+        if not chul_cols:
+            continue
+
+        col = chul_cols[0]
+        tmp = tmp.copy()
+        tmp["_valid_chulno"] = pd.to_numeric(tmp[col], errors="coerce")
+        tmp = tmp[tmp["_valid_chulno"].between(1, 14, inclusive="both")]
+
+        for _, r in tmp.iterrows():
+            n = int(r["_valid_chulno"])
+            name = f"{n}번"
+            for nc in ["hrName", "마명", "horseName", "rcName"]:
+                if nc in tmp.columns and pd.notna(r.get(nc, None)) and str(r.get(nc)).strip():
+                    name = str(r.get(nc)).strip()
+                    break
+            nums[n] = name
+            evidence.setdefault(n, set()).add(key)
+
+    rows = []
+    for n in sorted(nums.keys()):
+        ev = ",".join(sorted(evidence.get(n, [])))
+        base_score = 50 + len(evidence.get(n, [])) * 5
+        rows.append({"마번": n, "마명": nums[n], "점수": base_score, "근거": ev})
     return pd.DataFrame(rows)
 
-def op_missed_candidates(review_records, horses_df):
-    if review_records is None or len(review_records)==0 or "빠진말" not in review_records.columns:
-        return pd.DataFrame(columns=["놓친말","건수","최근원인","현재후보"])
-    rr=review_records[review_records["빠진말"].astype(str).str.len()>0]
-    if len(rr)==0: return pd.DataFrame(columns=["놓친말","건수","최근원인","현재후보"])
-    out=rr.groupby("빠진말").agg(건수=("빠진말","count"), 최근원인=("실패원인", lambda x:" / ".join(str(v) for v in x.tail(3)))).reset_index().sort_values("건수", ascending=False)
-    current=set()
-    if horses_df is not None and len(horses_df) and "마번" in horses_df.columns:
-        current=set(f"{int(x)}번" for x in pd.to_numeric(horses_df["마번"], errors="coerce").dropna())
-    out["현재후보"]=out["놓친말"].apply(lambda x: "오늘 출전 가능성 있음" if str(x) in current else "현재 표에는 없음")
+def valid_combo_only(combo):
+    try:
+        parts = [int(x.strip()) for x in str(combo).replace("/", "-").split("-") if str(x).strip()]
+        return len(parts) == 3 and len(set(parts)) == 3 and all(1 <= n <= 14 for n in parts)
+    except Exception:
+        return False
+
+def combo_inside_valid_nums(combo, valid_nums):
+    try:
+        parts = [int(x.strip()) for x in str(combo).replace("/", "-").split("-") if str(x).strip()]
+        return len(parts) == 3 and all(n in valid_nums for n in parts)
+    except Exception:
+        return False
+
+def filter_combos_to_valid(combos, valid_nums):
+    if not combos:
+        return []
+    valid_nums = set(int(x) for x in valid_nums)
+    out = []
+    for c in combos:
+        try:
+            combo_text = c.get("조합", c.get("combo", c.get("공격삼쌍승", "")))
+            if valid_combo_only(combo_text) and combo_inside_valid_nums(combo_text, valid_nums):
+                out.append(c)
+        except Exception:
+            pass
     return out
 
-def op_absolute_hold(horses_df, combos_df):
-    hold_h=pd.DataFrame(); hold_c=pd.DataFrame()
-    if horses_df is not None and len(horses_df):
-        h=horses_df.copy(); mask=pd.Series(False, index=h.index)
-        if "빨간경고수" in h.columns: mask |= pd.to_numeric(h["빨간경고수"], errors="coerce").fillna(0) >= 3
-        if "체중증감" in h.columns: mask |= pd.to_numeric(h["체중증감"], errors="coerce").fillna(0) <= -12
-        if "출전간격일" in h.columns: mask |= pd.to_numeric(h["출전간격일"], errors="coerce").fillna(0) >= 120
-        hold_h=h[mask]
-    if combos_df is not None and len(combos_df): hold_c=combos_df[combos_df.apply(op_is_hold_combo, axis=1)]
-    return hold_h, hold_c
+def force_chulno_only_after_analysis(data, score_df, result, combos):
+    base = valid_chulno_base(data)
+
+    if base.empty or len(base) < 3:
+        if result:
+            result["판정"] = "관망"
+            result["추천금액"] = 0
+            result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
+            result["공격삼쌍승"] = "-"
+            result["방어삼복승"] = "-"
+            result["보조삼쌍승"] = "-"
+            result["예상배당"] = 0
+            result["자금상태"] = "현재 경주 chulNo 부족 / 점수표 생성 차단"
+        return base, result, []
+
+    valid_nums = set(base["마번"].astype(int).tolist())
+    clean_score = base.copy()
+
+    # 기존 점수표에 같은 마번이 있을 때만 점수 반영
+    try:
+        if score_df is not None and not score_df.empty and "마번" in score_df.columns:
+            tmp = score_df.copy()
+            tmp["마번"] = pd.to_numeric(tmp["마번"], errors="coerce")
+            tmp = tmp[tmp["마번"].isin(valid_nums)]
+            if "점수" in tmp.columns and not tmp.empty:
+                score_map = dict(zip(tmp["마번"].astype(int), tmp["점수"]))
+                clean_score["점수"] = clean_score["마번"].map(score_map).fillna(clean_score["점수"])
+    except Exception:
+        pass
+
+    clean_combos = filter_combos_to_valid(combos, valid_nums)
+
+    if result:
+        combo = result.get("공격삼쌍승", "")
+        if (not valid_combo_only(combo)) or (not combo_inside_valid_nums(combo, valid_nums)):
+            result["판정"] = "관망"
+            result["추천금액"] = 0
+            result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
+            result["공격삼쌍승"] = "-"
+            result["방어삼복승"] = "-"
+            result["보조삼쌍승"] = "-"
+            result["예상배당"] = 0
+            result["자금상태"] = "현재 경주 출전마 외 조합 차단"
+
+    return clean_score, result, clean_combos
+
+score_df, result, combos = analyze(data, env)
+score_df, result, combos = force_chulno_only_after_analysis(data, score_df, result, combos)
+if result and not current_race_ready(result):
+    result["판정"] = "관망"
+    result["추천금액"] = 0
+    result["신뢰도"] = min(int(result.get("신뢰도", 0)), 49)
+    result["자금상태"] = "현재 경주정보 부족 / 데이터 섞임 방지"
+
+try:
+    entry_candidate = horse_no_col(data.get("entry", pd.DataFrame()))
+    if not entry_candidate:
+        st.info("마번 기준: entry에 chulNo가 없어 body/gear/today_odds의 chulNo를 우선 사용합니다.")
+except Exception:
+    pass
 
 
+def is_valid_combo_text(x):
+    s = str(x or "")
+    parts = [p.strip() for p in s.replace("/", "-").split("-")]
+    if len(parts) != 3:
+        return False
+    try:
+        nums = [int(p) for p in parts]
+        return all(1 <= n <= 30 for n in nums)
+    except Exception:
+        return False
 
-st.subheader("🚨 특급 알림 후보 전체")
-if "super_candidates" in globals() and len(super_candidates):
-    st.dataframe(super_candidates, width="stretch")
-else:
-    st.info("현재 특급 알림 기준을 만족하는 조합은 없습니다.")
+if auto_save_reco and result and result.get("공격삼쌍승","-") != "-" and valid_combo_only(result.get("공격삼쌍승","")) and current_race_ready(result) and is_valid_combo_text(result.get("공격삼쌍승","")) and int(result.get("신뢰도",0)) > 0:
+    append_table(RECO_FILE, {
+        "저장시각":now_kst_str(),
+        "날짜":target_date if "target_date" in globals() else today(),
+        **result,
+        "날씨":env.get("weather",""),
+        "주로":env.get("track",""),
+        "모래":env.get("sand",""),
+        "바람":env.get("wind","")
+    })
 
-if mobile_fast_mode:
-    st.subheader("📱 모바일 빠른 화면")
-    render_final_decision_card(operation_combos if "operation_combos" in globals() and len(operation_combos) else combos)
+rows = sum(len(v) for v in data.values())
+reco_df = read_table(RECO_FILE)
+compare_df = read_table(COMPARE_FILE)
 
-    st.markdown("""
-### 30배 이상 배당 집중 시간대
-30배 이상 조합은 특정 시각 하나보다 **각 경주 출발 전 20분~3분**이 핵심입니다.
+st.info(f"선택 기준: {target_date} · {track_place} · {int(target_rc_no)}R · 엄격필터={strict_race_filter}")
+m1, m2, m3 = st.columns(3)
+st.caption("URL 예시는 API Key를 숨겨 표시합니다. 과거 캡처에 키가 보였다면 재발급을 권장합니다.")
+m1.metric("연결 데이터", rows)
+m2.metric("추천 저장", len(reco_df))
+m3.metric("비교 저장", len(compare_df))
 
-```text
-출발 30분 전: 사전관찰
-출발 20분 전: 30배 집중감시
-출발 10분 전: 강력감시
-출발 5분 전: 특급감시
-출발 3분 전: 최종확인
-```
-""")
-    if 'hot_time_combos' in globals() and len(hot_time_combos):
-        st.dataframe(hot_time_combos.head(5), width="stretch")
 
-    st.markdown("""
-### 감시모드 안내
-핸드폰이 완전히 꺼진 상태에서 웹앱이 스스로 켜지지는 않습니다.  
-대신 감시모드를 켜두면 앱이 열린 상태에서 자동 확인하고, 특급 조합이 뜨면 강력 진동·경고음·화면 번쩍임을 줍니다.
-""")
-    st.caption("무거운 분석은 서버에서 계산하고, 휴대폰에는 핵심 결과만 먼저 보여줍니다.")
+st.divider()
+pc_left, pc_mid, pc_right = st.columns([1.15, 1.4, 1.0])
 
-    s = summary if "summary" in globals() else cached_summary
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("오늘 판단", s.get("오늘 판단", ""))
-    m2.metric("30배 후보", f"{s.get('30배 후보', 0)}개")
-    m3.metric("추천 구매", f"{s.get('추천 구매 수', 0)}개")
-    m4.metric("하루 제한", f"{s.get('하루 제한', 0)}개")
+with pc_left:
+    st.subheader("현재 선택")
+    try:
+        st.write(f"**날짜:** {target_date}")
+        st.write(f"**경마장:** {track_place}")
+        st.write(f"**경주번호:** {int(target_rc_no)}R")
+        if "strict_race_filter" in globals():
+            st.write(f"**엄격 필터:** {strict_race_filter}")
+    except Exception:
+        st.write(f"**경마장:** {track_place}")
 
-    if "operation_combos" in globals() and len(operation_combos):
-        st.subheader("오늘 바로 볼 추천 1~2개")
-        mobile_cols = ["운영판정","판정","경마장","경주번호","출발시간","방식","1착","2착","3착","예상배당","자동투자금","신뢰등급","메모"]
-        mobile_cols = [c for c in mobile_cols if c in operation_combos.columns]
-        st.dataframe(operation_combos.head(max_daily_buys if "max_daily_buys" in globals() else 2)[mobile_cols], width="stretch")
+with pc_mid:
+    st.subheader("추천 핵심")
+    try:
+        st.write(f"**판정:** {result.get('판정','대기')}")
+        st.write(f"**공격 삼쌍승:** {result.get('공격삼쌍승','-')}")
+        st.write(f"**방어 삼복승:** {result.get('방어삼복승','-')}")
+        st.write(f"**추천금액:** {result.get('추천금액',0):,}원")
+    except Exception:
+        st.write("분석 대기")
+
+with pc_right:
+    st.subheader("운영 상태")
+    try:
+        st.write(f"**오늘손익:** {result.get('오늘손익',0):,}원")
+        st.write(f"**누적손익:** {result.get('누적손익',0):,}원")
+        st.write(f"**자금상태:** {result.get('자금상태','-')}")
+        st.write(f"**기상특보:** {result.get('기상특보위험',0)}")
+    except Exception:
+        st.write("운영 상태 대기")
+
+st.divider()
+if errors:
+    st.warning(f"보조 API 오류 {len(errors)}개. 핵심 데이터가 있으면 분석은 계속됩니다.")
+    with st.expander("오류 상세 보기"):
+        st.write(errors)
+
+st.subheader("최종 판단")
+st.success(result.get("판정", "대기"))
+
+a, b, c = st.columns(3)
+a.metric("신뢰도", f"{result.get('신뢰도', 0)}%")
+b.metric("추천금액", f"{result.get('추천금액', 0):,}원")
+c.metric("오늘진입", f"{result.get('오늘진입', 0)} / {int(daily_entries_limit)}")
+
+st.info(f"{result.get('경마장','-')} {result.get('경주번호','-')}R · 출발 {result.get('출발시간','-')}")
+
+st.markdown("### 공격 삼쌍승")
+st.markdown(f"## {result.get('공격삼쌍승','-')}")
+st.caption(f"예상배당: {result.get('예상배당','-')}배")
+
+st.markdown("### 손실 방어 조합")
+st.write(f"방어 삼복승: **{result.get('방어삼복승','-')}**")
+st.write(f"보조 삼쌍승: **{result.get('보조삼쌍승','-')}**")
+st.write(f"놓치기 아까운 삼쌍승: **{result.get('놓치기아까운1','')}** / **{result.get('놓치기아까운2','')}**")
+
+st.markdown("### 자금 잠금 규칙")
+st.write(f"오늘 투입: **{result.get('오늘투입',0):,}원 / {int(daily_budget):,}원**")
+st.write(f"오늘 손익: **{result.get('오늘손익',0):,}원**")
+st.write(f"누적 손익: **{result.get('누적손익',0):,}원**")
+st.write(f"상태: **{result.get('자금상태','-')}**")
+st.write(f"기상특보 위험: **{result.get('기상특보위험',0)}**")
+
+st.markdown("### 환경 반영")
+e1, e2, e3 = st.columns(3)
+e1.metric("날씨", env.get("weather", "-"))
+e2.metric("주로", env.get("track", "-"))
+e3.metric("모래", env.get("sand", "-"))
+
+st.link_button("KRA 공식 바로가기", kra_url, use_container_width=True)
+st.caption("자동구매 아님 · 공식 화면 이동 · 수익 보장 아님 · 손실 제한/기록학습")
+
+with st.expander("결과 입력 / 예상비교 / 자가학습"):
+    actual_combo = st.text_input("실제 삼쌍 1-2-3", placeholder="예: 5-11-2")
+    actual_trio = st.text_input("실제 삼복 1~3착", placeholder="예: 5/11/2")
+    bet_amount = st.number_input("투입금", min_value=0, value=int(result.get("추천금액",0)), step=100)
+    return_amount = st.number_input("환급금", min_value=0, value=0, step=100)
+    memo = st.text_input("메모")
+    if st.button("결과 저장하고 AI 학습", use_container_width=True):
+        pred = result.get("공격삼쌍승","").replace(" ","")
+        actual = actual_combo.replace(" ","")
+        trio_pred = set(result.get("방어삼복승","").replace(" ","").split("/"))
+        trio_actual = set((actual_trio or actual_combo).replace(" ","").replace("-","/").split("/"))
+        tri_hit = int(pred == actual)
+        trio_hit = int(trio_pred == trio_actual)
+        roi = ((return_amount - bet_amount) / bet_amount) if bet_amount > 0 else 0
+        if tri_hit:
+            typ = "삼쌍승 적중"
+        elif trio_hit:
+            typ = "삼복승 방어"
+        elif return_amount > 0:
+            typ = "부분환급"
+        else:
+            typ = "미적중"
+        rec = {
+            "저장시각":now_kst_str(),
+            "날짜":today(),
+            **result,
+            "투입금":bet_amount,
+            "환급금":return_amount,
+            "수익률":roi,
+            "실제삼쌍":actual_combo,
+            "실제삼복":actual_trio,
+            "분석결과":typ,
+            "메모":memo
+        }
+        append_table(RESULT_FILE, rec)
+        append_table(COMPARE_FILE, rec)
+        st.success(f"저장 완료: {typ}")
+
+with st.expander("숨겨진 분석 / 저장 데이터"):
+    
+    st.subheader("API 원본 컬럼 진단")
+    debug_keys = ["race", "entry", "horse", "body", "gear", "rating", "odds", "today_odds", "corner_pace"]
+    rows = []
+    for k in debug_keys:
+        df = data.get(k, pd.DataFrame())
+        if df is not None and not df.empty:
+            rows.append({
+                "API": k,
+                "행수": len(df),
+                "컬럼수": len(df.columns),
+                "마번후보": str(horse_no_col(df)),
+                "컬럼목록": ", ".join([str(c) for c in list(df.columns)[:25]])
+            })
+        else:
+            rows.append({"API": k, "행수": 0, "컬럼수": 0, "마번후보": "", "컬럼목록": ""})
+    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    st.subheader("2번 출전 등록말 원본 미리보기")
+    if not data.get("entry", pd.DataFrame()).empty:
+        st.dataframe(data.get("entry", pd.DataFrame()).head(20), use_container_width=True)
     else:
-        st.info("현재 추천 조합이 없습니다.")
+        st.write("entry 데이터 없음")
 
-    if "cached_one_line" in globals() and len(cached_one_line):
-        st.subheader("경주별 한 줄 결론")
-        st.dataframe(cached_one_line, width="stretch")
+    st.subheader("API 연결 데이터 행수")
+    st.caption("점수표와 추천은 body/gear/today_odds의 chulNo만 사용합니다. enNo/hrNo/chaksun은 마번으로 쓰지 않습니다.")
+    st.dataframe(pd.DataFrame([{"API":k, "행수":len(v)} for k, v in data.items()]), use_container_width=True)
 
-    st.markdown("""
-### 모바일 빠른모드 사용법
-- 첫 화면에서는 오늘요약, 추천 1~2개, 한줄결론만 봅니다.
-- 착차/전개/복기/AI학습 같은 상세 기능은 서버에서 계산되지만 화면에는 숨깁니다.
-- 필요할 때 왼쪽에서 `상세 분석 탭 표시`를 켜면 전체 탭을 볼 수 있습니다.
-""")
+    st.subheader("말별 점수표(chulNo)")
+    st.dataframe(score_df, use_container_width=True)
 
-    if not show_deep_tabs:
-        st.warning("상세 분석 탭은 숨김 상태입니다. 기능은 유지되고 서버에서 계산됩니다.")
+    st.subheader("삼쌍승 시뮬레이션")
+    st.dataframe(pd.DataFrame(combos), use_container_width=True)
 
-if mobile_fast_mode and not show_deep_tabs:
-    st.stop()
+    st.subheader("과거 추천 로그")
+    st.dataframe(read_table(RECO_FILE).tail(100), use_container_width=True)
 
-tabs=st.tabs(["🎯 종합판단","📌 오늘요약","🧬 AI진화학습","🚨 특급알림","🏁 결과자동비교","💸 최종배당통계","👀 미구매관찰","📊 구매vs관찰","🧾 경주별 한줄결론","👻 놓친말 후보","🧯 과다방지·투자금","🚫 절대보류","✅ 확신도·경고","🛑 오늘 쉬는 날","📚 누적100·500","🏇 착차분석","🧭 전개분석","🤝 기수+조교사","⚖️ 정상체중","📝 실패조합복기","🏁 최종점수","🏃 페이스예상","🎂 마령보정","📉 배당급변","🧭 코스통계","🧱 실패블랙리스트","🌦️ 날씨·주로 특수보정","❗ 인기마제거","🔥 30배조합","🐎 마필누적","🧑‍✈️ 기수통계","📏 거리성적","🌦️ 주로상태","💹 ROI","✅ 왜 적중","❌ 실패원인","⏰ 시간표/출마표","🌐 원본표","📂 CSV","🟩 구글시트","📘 사용법"])
+    st.subheader("과거 예상 vs 실제 비교 로그")
+    st.dataframe(read_table(COMPARE_FILE).tail(100), use_container_width=True)
 
-with tabs[0]:
-    st.subheader("🎯 종합 실전판단")
-    a_grade = int((horses["최종판정"].str.contains("A등급")).sum())
-    over30 = int((combos["예상배당"]>=target_odds).sum()) if len(combos) else 0
-    conclusion = "🔥 도전 가능" if over30 and a_grade and roi>=80 else "💰 소액 도전" if over30 else "⛔ 보류"
-    c1,c2,c3,c4=st.columns(4)
-    c1.metric("오늘 결론", conclusion)
-    c2.metric("A등급 말", f"{a_grade}두")
-    c3.metric("30배 조합", f"{over30}개")
-    c4.metric("ROI", f"{roi}%")
-    st.dataframe(operation_combos.head(10) if "operation_combos" in globals() and len(operation_combos) else combos.head(10), width="stretch")
+    st.subheader("자동 완성된 URL 예시 — API Key 숨김")
+    examples = []
+    for name, url in {
+        "race":race_url,
+        "entry":entry_url,
+        "horse":horse_url,
+        "rating":rating_url,
+        "today_odds":today_odds_url,
+        "corner_pace":corner_pace_url,
+    }.items():
+        examples.append({"API":name, "요청URL":mask_secret_url(build_api_url(url))})
+    st.dataframe(pd.DataFrame(examples), use_container_width=True)
 
-with tabs[1]:
-    st.subheader("📌 오늘 경주 자동 요약 카드")
-    st.dataframe(pd.DataFrame([summary]), width="stretch")
-    st.markdown("""
-### 해석
-- 추천 구매 수가 0이면 관망입니다.
-- A등급 후보와 30배 후보가 같이 있을 때 실전 후보로 봅니다.
-- 빨간경고 경주가 많으면 구매 수를 줄입니다.
-""")
 
-with tabs[2]:
-    st.subheader("🧬 학습으로 진화하는 AI")
-    update_learning_memory_from_records()
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("AI 진화점수", f"{learning_evolution_score()}/100")
-    c2.metric("미구매 관찰", f"{len(st.session_state.observation_records)}건")
-    c3.metric("실제 구매기록", f"{len(st.session_state.records)}건")
-    c4.metric("오늘 구매 제한", f"{st.session_state.daily_purchase_count}/{daily_buy_limit}")
-    st.markdown("""
-### 구조
-구매한 조합만 배우는 것이 아니라, **구매하지 않은 후보도 관찰 데이터로 저장**합니다.
-결과표가 들어오면 산 조합과 안 산 조합을 모두 자동 비교합니다.
 
-```text
-후보 발견 → 미구매 관찰 저장 → 결과 확인 → 적중/실패 표시 → 통계 반영 → 다음 분석 보정
-```
-""")
-    st.subheader("학습 메모리")
-    st.dataframe(st.session_state.learning_memory.tail(100), width="stretch")
+st.divider()
+st.subheader("PC 상세 분석 패널")
 
-with tabs[3]:
-    st.subheader("🏁 실제 결과표 자동 비교")
-    st.markdown("""
-결과표 Google Sheet/CSV가 연결되면 AI 추천 조합과 실제 1·2·3착을 자동 비교합니다.
+tab_score, tab_sim, tab_api, tab_logs = st.tabs(["말별 점수표(chulNo)", "삼쌍승 시뮬레이션", "API 원본/진단", "과거 로그"])
 
-```text
-구매 조합 → 실제 결과와 비교 → 적중/실패 자동 판정
-미구매 관찰 조합 → 실제 결과와 비교 → 샀으면 맞았는지 자동 판정
-```
-""")
-    if result_sheet_url:
-        st.success(f"결과표 연결 상태: {result_msg}")
+with tab_score:
+    try:
+        st.dataframe(score_df, use_container_width=True, height=420)
+    except Exception:
+        st.write("점수표 없음")
+
+with tab_sim:
+    try:
+        st.dataframe(pd.DataFrame(combos), use_container_width=True, height=360)
+    except Exception:
+        st.write("시뮬레이션 없음")
+
+with tab_api:
+    try:
+        api_rows = []
+        for k, v in data.items():
+            api_rows.append({
+                "API": k,
+                "행수": len(v) if v is not None else 0,
+                "컬럼수": len(v.columns) if v is not None and not v.empty else 0,
+                "마번후보": str(horse_no_col(v)) if v is not None and not v.empty else ""
+            })
+        st.dataframe(pd.DataFrame(api_rows), use_container_width=True, height=360)
+        if "entry" in data and not data["entry"].empty:
+            st.write("2번 출전 등록말 원본 미리보기")
+            st.dataframe(data["entry"].head(50), use_container_width=True, height=360)
+    except Exception:
+        st.write("API 진단 표시 실패")
+
+with tab_logs:
+    try:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.write("과거 추천 로그")
+            st.dataframe(read_table(RECO_FILE).tail(100), use_container_width=True, height=360)
+        with col_b:
+            st.write("과거 예상 vs 실제 비교 로그")
+            st.dataframe(read_table(COMPARE_FILE).tail(100), use_container_width=True, height=360)
+    except Exception:
+        st.write("로그 없음")
+
+
+
+st.divider()
+st.subheader("허브 실시간 패널")
+try:
+    if sheets_enabled():
+        st.success("Google Sheets 허브 사용 중: PC/모바일 기록 공유")
     else:
-        st.info("왼쪽 설정에 결과표 Google Sheet/CSV 주소를 넣으면 자동 비교됩니다.")
+        st.info("Google Sheets 허브 미설정: Streamlit Secrets에 SHEET_ID와 SERVICE_ACCOUNT_JSON을 넣어야 PC/모바일 실시간 공유가 됩니다.")
+except Exception:
+    st.info("허브 상태 확인 대기")
 
-    st.subheader("결과표")
-    st.dataframe(st.session_state.race_results.tail(100), width="stretch")
+hub_tab1, hub_tab2, hub_tab3 = st.tabs(["허브 상태", "허브 점수 기록", "허브 추천/비교"])
 
-    st.subheader("자동 비교 로그")
-    st.dataframe(st.session_state.result_compare_log.tail(200), width="stretch")
+with hub_tab1:
+    try:
+        if hub_read_mode:
+            st.dataframe(hub_read_recent("hub_status", 100), use_container_width=True, height=320)
+        else:
+            st.write("허브 불러오기 OFF")
+    except Exception:
+        st.write("허브 상태 없음")
 
-    st.subheader("결과표 수동 업로드")
-    result_file = st.file_uploader("결과표 CSV 업로드", type=["csv"], key="result_csv_upload")
-    if result_file:
-        st.session_state.race_results = normalize_result_df(pd.read_csv(result_file))
-        compare_now = auto_compare_combos_with_results(operation_combos if "operation_combos" in globals() else combos, st.session_state.race_results)
-        updated_obs_count = update_observations_from_results(st.session_state.race_results)
-        update_learning_memory_from_records()
-        st.success(f"결과표 업로드 및 자동 비교 완료 / 관찰 {updated_obs_count}건 판정")
+with hub_tab2:
+    try:
+        if hub_read_mode:
+            st.dataframe(hub_read_recent("score_snapshots", 100), use_container_width=True, height=420)
+        else:
+            st.write("허브 불러오기 OFF")
+    except Exception:
+        st.write("허브 점수 기록 없음")
 
-with tabs[4]:
-    st.subheader("💸 최종배당 기록 / 통계")
-    st.markdown("""
-예상배당과 최종배당을 비교해서 수익성이 실제로 유지됐는지 봅니다.
-
-예:
-- 예상 35배 → 최종 18배: 수익성 하락
-- 예상 25배 → 최종 42배: 복병 가치 상승
-""")
-    st.dataframe(result_compare_stats(), width="stretch")
-    if len(st.session_state.result_compare_log):
-        log = st.session_state.result_compare_log.copy()
-        log["배당차이"] = pd.to_numeric(log["최종배당"], errors="coerce").fillna(0) - pd.to_numeric(log["예상배당"], errors="coerce").fillna(0)
-        st.dataframe(log.sort_values("배당차이", ascending=False).tail(200), width="stretch")
-    else:
-        st.info("아직 결과 비교 로그가 없습니다.")
-
-
-with tabs[5]:
-    st.subheader("👀 구매 안 한 후보 자동 관찰 데이터")
-    st.markdown(f"""
-자동 관찰 저장은 상위 **{observe_top_n}개 후보**까지 저장합니다.  
-실제로 구매하지 않아도 나중에 결과를 입력하면 통계자료로 쓸 수 있습니다.
-""")
-    st.dataframe(st.session_state.observation_records.tail(200), width="stretch")
-
-    st.markdown("### 관찰 결과 수동 업데이트")
-    if len(st.session_state.observation_records):
-        obs_idx = st.number_input("수정할 관찰행 번호", 0, max(0, len(st.session_state.observation_records)-1), max(0, len(st.session_state.observation_records)-1))
-        obs_result = st.selectbox("관찰 결과", ["결과대기","적중","실패","놓침","보류"])
-        actual_result = st.text_input("실제 결과/들어온 말", "")
-        if st.button("👀 관찰 결과 저장", width="stretch"):
-            st.session_state.observation_records.loc[int(obs_idx), "관찰결과"] = obs_result
-            st.session_state.observation_records.loc[int(obs_idx), "실제결과"] = actual_result
-            update_learning_memory_from_records()
-            st.success("관찰 결과 저장 완료")
-
-with tabs[6]:
-    st.subheader("📊 실제 구매 vs 미구매 관찰 통계")
-    st.dataframe(purchase_vs_observe_stats(), width="stretch")
-    st.subheader("관찰 통계")
-    st.dataframe(observation_stats(), width="stretch")
-    st.markdown("""
-### 해석
-- 실제 구매는 하루 1~2회만 해도 됩니다.
-- 나머지 후보는 관찰 기록으로 쌓습니다.
-- 관찰 적중률이 높은 조건이 반복되면 다음 실전 구매 후보로 승격합니다.
-""")
-
-
-with tabs[7]:
-    st.subheader("🧾 경주별 한 줄 결론")
-    one_line = op_race_lines(horses, combos, target_odds)
-    st.dataframe(one_line, width="stretch")
-    for _, row in one_line.iterrows():
-        st.markdown(f"- **{row['한줄결론']}**")
-
-with tabs[8]:
-    st.subheader("👻 놓친 말 자동 후보")
-    missed = op_missed_candidates(st.session_state.review_records if "review_records" in st.session_state else pd.DataFrame(), horses)
-    st.dataframe(missed, width="stretch")
-
-with tabs[9]:
-    st.subheader("🧯 조합 과다 방지 / 투자금 자동 조절")
-    st.markdown(f"""
-### 현재 운영 설정
-- 운영 모드: **{operation_mode}**
-- 하루 최대 추천 구매 수: **{max_daily_buys}개**
-- 기본 투자금: **{int(base_stake):,}원**
-
-A등급은 기본 투자금, B등급은 절반, C/D등급은 제외합니다. 위험합계가 높거나 120배 이상 초고배당이면 자동으로 소액화합니다.
-""")
-    st.dataframe(operation_combos if "operation_combos" in globals() and len(operation_combos) else combos, width="stretch")
-
-with tabs[10]:
-    st.subheader("🚫 절대 보류 규칙")
-    hold_horses, hold_combos = op_absolute_hold(horses, combos)
-    st.markdown("""
-아무리 배당이 좋아도 아래 조건이면 보류 쪽으로 봅니다.
-
-- 빨간경고 3개 이상
-- 체중 -12kg 이상
-- 4개월 이상 공백
-- 인기마 과다로 배당 죽음
-- 위험합계 과다
-""")
-    st.subheader("보류 대상 말")
-    st.dataframe(hold_horses, width="stretch")
-    st.subheader("보류 대상 조합")
-    st.dataframe(hold_combos, width="stretch")
-
-with tabs[11]:
-    st.subheader("✅ 확신도(%) / 빨간 경고 시스템")
-    st.markdown("""
-### 기준
-- A등급: 확신도 90% 이상
-- B등급: 70~89%
-- C등급: 60~69%
-- D등급: 보류
-
-빨간 경고가 3개 이상이면 자동 D등급으로 내립니다.
-""")
-    st.dataframe(horses[[
-        "경주마","마번","현재배당","최종실전점수","확신도","추천별점","확신등급",
-        "빨간경고수","빨간경고","최종판정"
-    ]].sort_values("확신도", ascending=False), width="stretch")
-
-with tabs[12]:
-    st.subheader("🛑 오늘 쉬는 날 판단")
-    rest_result, rest_reason = today_rest_decision(combos, horses, target_odds)
-    over30 = int((combos["예상배당"] >= target_odds).sum()) if len(combos) else 0
-    a_count = int((horses["확신등급"].astype(str).str.contains("A등급")).sum()) if len(horses) else 0
-    r1, r2, r3 = st.columns(3)
-    r1.metric("오늘 결론", rest_result)
-    r2.metric("30배 후보", f"{over30}개")
-    r3.metric("A등급", f"{a_count}개")
-    st.markdown(f"""
-### 이유
-**{rest_reason}**
-
-돈 버는 사람은 사는 날보다 **안 사는 날**을 잘 고릅니다.
-""")
-
-with tabs[13]:
-    st.subheader("📚 최근 100회 / 500회 누적 자기학습")
-    s100 = record_window_stats(st.session_state.records, 100)
-    s500 = record_window_stats(st.session_state.records, 500)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("최근100 적중률", f"{s100['적중률']}%")
-    c2.metric("최근100 ROI", f"{s100['ROI']}%")
-    c3.metric("최근500 적중률", f"{s500['적중률']}%")
-    c4.metric("최근500 ROI", f"{s500['ROI']}%")
-    st.subheader("최근 100회")
-    st.dataframe(pd.DataFrame([s100]), width="stretch")
-    st.subheader("최근 500회")
-    st.dataframe(pd.DataFrame([s500]), width="stretch")
-    st.subheader("실패 원인 TOP10")
-    st.dataframe(failure_top10(st.session_state.records), width="stretch")
-
-
-with tabs[14]:
-    st.subheader("🏇 착차 분석")
-    st.markdown("순위만 보지 않고, 얼마나 근소하게 졌는지/크게 졌는지 반영합니다.")
-    st.dataframe(horses[[
-        "경주마","마번","순위","착차","착차점수","착차메모","최종실전점수","확신도","확신등급"
-    ]].sort_values("착차점수", ascending=False), width="stretch")
-
-with tabs[15]:
-    st.subheader("🧭 초반/중반/4코너/결승 전개 분석")
-    st.markdown("초반만 빠른 말, 막판 추입형, 선행 유지형, 직선에서 무너지는 말을 구분합니다.")
-    st.dataframe(horses[[
-        "경주마","마번","초반위치","중반위치","4코너위치","결승위치",
-        "전개점수","전개메모","주행습성","최종실전점수","확신등급"
-    ]].sort_values("전개점수", ascending=False), width="stretch")
-
-with tabs[16]:
-    st.subheader("🤝 기수+조교사 조합 승률")
-    st.markdown("기수 단독보다, 기수+조교사 조합이 실제로 맞는지 봅니다.")
-    jt = jockey_trainer_combo_stats(data)
-    st.dataframe(jt, width="stretch")
-    st.subheader("말별 조합점수 반영")
-    st.dataframe(horses[[
-        "경주마","마번","기수","조교사","기수승률","조교사승률",
-        "기수조교사조합점수","최종실전점수","확신등급"
-    ]].sort_values("기수조교사조합점수", ascending=False), width="stretch")
-
-with tabs[17]:
-    st.subheader("⚖️ 말별 정상체중 범위")
-    st.markdown("현재체중/평균체중이 있으면 정상 범위 이탈을 보고, 없으면 체중증감으로 판단합니다.")
-    st.dataframe(horses[[
-        "경주마","마번","현재체중","평균체중","체중증감",
-        "정상체중점수","정상체중메모","빨간경고","최종실전점수","확신등급"
-    ]].sort_values("정상체중점수", ascending=False), width="stretch")
-
-with tabs[18]:
-    st.subheader("📝 실패 조합 상세 복기")
-    st.markdown("예상 조합과 실제 조합, 빠진 말, 실패 원인을 저장해서 다음 분석에 감점 규칙으로 반영합니다.")
-    st.dataframe(st.session_state.review_records.tail(100), width="stretch")
-    st.subheader("실패 복기 원인 TOP10")
-    st.dataframe(review_failure_top(st.session_state.review_records), width="stretch")
-
-    st.markdown("### 새 복기 기록 추가")
-    c1, c2 = st.columns(2)
-    with c1:
-        expected_combo = st.text_input("예상 조합", "5-6-8")
-        actual_combo = st.text_input("실제 조합", "5-2-8")
-        missing_horse = st.text_input("빠진 말 / 놓친 말", "2번")
-    with c2:
-        fail_reason = st.text_input("실패 원인", "외곽 게이트|체중 급감|거리 약함")
-        fix_rule = st.text_input("다음 수정 규칙", "외곽+장거리 조합 감점")
-        review_result = st.selectbox("결과", ["실패","적중","보류"])
-    if st.button("📝 복기 기록 저장", width="stretch"):
-        new_row = pd.DataFrame([{
-            "날짜": pd.Timestamp.today().strftime("%Y-%m-%d"),
-            "경마장": course,
-            "경주": "",
-            "예상조합": expected_combo,
-            "실제조합": actual_combo,
-            "결과": review_result,
-            "빠진말": missing_horse,
-            "실패원인": fail_reason,
-            "수정규칙": fix_rule
-        }])
-        st.session_state.review_records = pd.concat([st.session_state.review_records, new_row], ignore_index=True)
-        st.success("실패 조합 복기 기록 저장 완료")
-
-
-with tabs[19]:
-    st.dataframe(horses[["경주마","마번","현재배당","최종실전점수","복기강화점수","착차점수","전개점수","정상체중점수","기수조교사조합점수","최종판정","최근5경기흐름","체중변화점수","기수교체점수","출전간격점수","거리전환점수","게이트거리점수","페이스점수","마령점수","배당급변점수","실패블랙점수","날씨주로특수점수","날씨주로메모","확신도","추천별점","확신등급","빨간경고","인기유형","위험요인"]], width="stretch")
-
-with tabs[20]:
-    st.subheader("🏃 경주 페이스 예상")
-    st.markdown("""
-선행마가 많으면 초반 과열 → 추입마 유리, 선행마가 적으면 선행마가 편하게 갈 가능성을 반영합니다.
-""")
-    st.dataframe(horses[[
-        "경마장","경주번호","경주마","마번","주행습성","선행마수","선행선입수",
-        "페이스예상","페이스유리","페이스점수","페이스메모","최종실전점수","최종판정"
-    ]].sort_values(["경주번호","페이스점수"], ascending=[True,False]), width="stretch")
-
-with tabs[21]:
-    st.subheader("🎂 마령/나이 보정")
-    st.markdown("""
-보통 3~5세는 전성기, 8세 이상은 감점합니다. 장거리에서는 체력 영향이 더 큽니다.
-""")
-    st.dataframe(horses[["경주마","마번","마령","거리","마령점수","지구력점수","최종실전점수","최종판정"]].sort_values("마령점수", ascending=False), width="stretch")
-
-with tabs[22]:
-    st.subheader("📉 당일 배당 급변")
-    st.markdown("""
-출발 직전 인기 급상승은 시장 관심/내부 정보 가능성, 인기 급하락은 컨디션 이상 가능성으로 봅니다.
-""")
-    st.dataframe(horses[["경주마","마번","초기배당","현재배당","배당변화율","배당급변점수","배당급변메모","최종실전점수","최종판정"]].sort_values("배당급변점수", ascending=False), width="stretch")
-
-with tabs[23]:
-    st.subheader("🧭 코스별 통계")
-    st.markdown("서울 1200m / 1400m / 1700m / 1800m처럼 코스별로 유리한 게이트와 성적을 따로 봅니다.")
-    st.dataframe(course_stats(data), width="stretch")
-
-with tabs[24]:
-    st.subheader("🧱 실패 패턴 블랙리스트 / 자기학습")
-    st.markdown("""
-최근 100개 적중/실패 기록을 보고 반복 실패 요인을 다음 점수에 감점합니다.
-""")
-    st.dataframe(self_learning_summary(st.session_state.records), width="stretch")
-    st.subheader("마필별 실패블랙 감점")
-    st.dataframe(horses[["경주마","마번","거리","체중증감","기수승률","실패블랙점수","실패블랙메모","최종실전점수","최종판정"]].sort_values("실패블랙점수"), width="stretch")
-
-
-with tabs[25]:
-    st.subheader("🌦️ 날씨·주로 특수보정")
-    st.markdown(f"""
-### 현재 설정
-- 날씨 조건: **{weather_type}**
-- 모래/주로 특수상태: **{sand_status}**
-
-### 반영 방식
-- 비 오는 날: 선행·선입, 안쪽 게이트, 지구력형 보정
-- 무더운 날: 체중 변화, 짧은 출전간격 감점 / 체력형 가산
-- 추운 날: 초반스피드, 컨디션 보정
-- 모래 새로교체: 기존 기록 신뢰도 일부 감점 / 파워·지구력형 가산
-- 안쪽/바깥쪽 무거움: 게이트 위치별 감점·가산
-""")
-    st.dataframe(horses[[
-        "경주마","마번","거리","주행습성","주로상태","현재배당",
-        "날씨주로특수점수","날씨주로메모","최종실전점수","최종판정"
-    ]].sort_values("날씨주로특수점수", ascending=False), width="stretch")
-
-
-with tabs[26]:
-    st.write("인기마 3마리 조합은 배당이 죽기 쉬워서 제거/주의합니다.")
-    st.dataframe(horses[["경주마","마번","현재배당","인기순위","인기유형","인기마제거점수","최종실전점수","최종판정"]], width="stretch")
-    if len(combos): st.dataframe(combos[["방식","1착","2착","3착","예상배당","인기마제거판정","조합점수","신뢰등급"]], width="stretch")
-
-with tabs[27]:
-    st.dataframe(combos, width="stretch")
-
-with tabs[28]:
-    hs=horses.groupby("경주마").agg(출전수=("경주마","count"),평균배당=("현재배당","mean"),평균점수=("최종실전점수","mean"),우승수=("순위", lambda x:int((pd.to_numeric(x, errors="coerce")==1).sum()))).reset_index()
-    hs["우승률"]=(hs["우승수"]/hs["출전수"]*100).round(1)
-    st.dataframe(hs.sort_values("평균점수", ascending=False), width="stretch")
-
-with tabs[29]:
-    js=horses.groupby("기수").agg(출전수=("기수","count"),평균승률=("기수승률","mean"),평균점수=("최종실전점수","mean"),우승수=("순위", lambda x:int((pd.to_numeric(x, errors="coerce")==1).sum()))).reset_index()
-    st.dataframe(js.sort_values("평균점수", ascending=False), width="stretch")
-
-with tabs[30]:
-    ds=horses.groupby("거리").agg(출전수=("거리","count"),평균거리적성=("거리적성","mean"),평균점수=("최종실전점수","mean"),평균배당=("현재배당","mean")).reset_index()
-    st.dataframe(ds, width="stretch")
-
-with tabs[31]:
-    ts=horses.groupby("주로상태").agg(출전수=("주로상태","count"),평균점수=("최종실전점수","mean"),평균배당=("현재배당","mean")).reset_index()
-    st.dataframe(ts, width="stretch")
-
-with tabs[32]:
-    st.dataframe(pd.DataFrame([{"총투자":invested,"총회수":returned,"순수익":profit,"ROI":f"{roi}%"}]), width="stretch")
-
-with tabs[33]:
-    st.dataframe(factor_table(st.session_state.records, "적중"), width="stretch")
-
-with tabs[34]:
-    st.dataframe(factor_table(st.session_state.records, "실패"), width="stretch")
-
-with tabs[35]:
-    st.dataframe(data[["경마장","경주번호","출발시간","경주명","거리","경주마","마번","기수","현재배당"]].sort_values(["경주번호","마번"]), width="stretch")
-
-with tabs[36]:
-    if st.session_state.raw_tables:
-        for i,t in enumerate(st.session_state.raw_tables,1):
-            st.write(f"원본표 {i}")
-            st.dataframe(t, width="stretch")
-    else:
-        st.info("KRA 원본 먼저 가져오기를 누르면 표시됩니다.")
-
-with tabs[37]:
-    st.write("CSV 업로드 시 권장 컬럼:")
-    st.info("수동 CSV 업로드는 최후 백업입니다. 평소에는 Google Sheet 주소를 왼쪽에 넣어두면 자동으로 읽습니다.")
-    st.code(", ".join(COLUMNS))
-    up=st.file_uploader("CSV 업로드", type=["csv"])
-    if up:
-        st.session_state.df=pd.read_csv(up)
-        st.success("CSV 업로드 완료")
-        st.rerun()
-
-with tabs[38]:
-    st.subheader("🟩 Google Sheet 자동 백업")
-    st.markdown("""
-### 컴퓨터 꺼져 있어도 가능한 이유
-- Streamlit 앱은 클라우드에서 실행됩니다.
-- Google Sheet는 인터넷 주소로 읽습니다.
-- 형님 컴퓨터가 꺼져 있어도 휴대폰에서 앱을 열면 데이터 읽기가 가능합니다.
-
-### 구글시트 연결 방법
-1. Google Sheet 만들기
-2. 첫 줄에 컬럼명 입력
-3. `파일 → 공유 → 웹에 게시` 또는 `링크가 있는 사용자 보기 가능`
-4. CSV 주소 또는 일반 시트 주소를 앱 왼쪽 `Google Sheet CSV 주소`에 입력
-5. 앱을 새로고침하면 자동 분석
-
-### 권장 컬럼
-""")
-    st.code(", ".join(COLUMNS))
-    st.markdown("""
-### 자동 순서
-기본값은 아래 순서입니다.
-
-```text
-KRA 홈페이지
-→ 실패하면 Google Sheet
-→ 실패하면 GitHub CSV
-→ 실패하면 샘플/수동 CSV
-```
-
-Google Sheet를 1순위로 쓰고 싶으면 왼쪽 `데이터 우선순위`에서 바꾸면 됩니다.
-""")
-    if google_sheet_url:
-        st.success("Google Sheet 주소가 입력되어 있습니다.")
-        st.code(normalize_sheet_url(google_sheet_url))
-    else:
-        st.info("왼쪽 설정에 Google Sheet 주소를 넣으면 자동 백업 데이터로 읽습니다.")
-
-
-with tabs[39]:
-    st.markdown("""
-### 자동 분석 구조
-앱 실행 → KRA 원본표 자동 가져오기 → 자동 분석 → 30배 후보 자동 계산
-
-### 최종 분석 구조
-KRA 원본표 → 시간표/출마표 → 최근5경기 흐름 → 체중 변화 → 기수 교체 → 출전 간격 → 거리 적성 → 게이트/마번 → 인기마 제거 → 30배 조합 → A/B/C/D 판정
-
-### 점수 구조
-핵심점수 60% + 기수 10% + 거리 10% + 체중 5% + 주로 5% + ROI 5% + 최근 상승세 5%
-
-### 인기마 제거 엔진
-1위 인기마 + 2위 인기마 + 3위 인기마 조합은 배당이 낮아질 수 있어 주의합니다.  
-강한 인기마 1마리 + 중간 인기마 1마리 + 복병 1마리 구조를 우선 확인합니다.
-
-자동구매는 없고, 공식 페이지에서 직접 확인 후 수동구매합니다.
-""")
-
-st.warning("예상배당은 공식 확정배당이 아니라 내부 계산입니다. 적중이나 수익을 보장하지 않습니다. 자동구매 기능은 없습니다.")
+with hub_tab3:
+    try:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.write("허브 추천 기록")
+            st.dataframe(hub_read_recent("recommendations", 100), use_container_width=True, height=360)
+        with c2:
+            st.write("허브 비교 기록")
+            st.dataframe(hub_read_recent("comparisons", 100), use_container_width=True, height=360)
+    except Exception:
+        st.write("허브 추천/비교 기록 없음")
