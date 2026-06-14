@@ -24,11 +24,72 @@ def now_kst_str():
     return now_kst().strftime("%Y-%m-%d %H:%M:%S")
 
 
-st.set_page_config(
-    page_title="MARU KRA PC DASHBOARD",
-    page_icon="🐎",
-    layout="wide"
+st.set_page_config(page_title="MARU KRA FORCE SIDEBAR", layout="wide", initial_sidebar_state="expanded")
+
+# ===== 강제 사이드바 복구 영역 =====
+st.sidebar.title("🐎 MARU KRA 메뉴")
+st.sidebar.caption("사이드바 강제 복구판")
+
+api_key = st.sidebar.text_input(
+    "공공데이터 API Key",
+    value=str(force_secret_or_setting("api_key", force_secret_or_setting("API_KEY", ""))),
+    type="password"
 )
+st.session_state["api_key"] = api_key
+
+st.sidebar.divider()
+st.sidebar.subheader("분석 기준")
+target_date = st.sidebar.text_input("분석 날짜", value=str(force_secret_or_setting("target_date", today() if "today" in globals() else "")))
+track_place = st.sidebar.selectbox("경마장", ["서울", "부산경남", "제주"], index=["서울", "부산경남", "제주"].index(str(force_secret_or_setting("track_place", "서울"))) if str(force_secret_or_setting("track_place", "서울")) in ["서울", "부산경남", "제주"] else 0)
+target_rc_no = st.sidebar.number_input("경주번호", min_value=1, max_value=20, value=int(force_secret_or_setting("target_rc_no", 1) or 1), step=1)
+strict_race_filter = st.sidebar.checkbox("선택 경주만 엄격 필터", value=False)
+
+st.sidebar.divider()
+st.sidebar.subheader("핵심 API 주소")
+for _key, _label in FORCE_API_KEYS[:8]:
+    globals()[_key] = st.sidebar.text_input(_label, value=str(force_secret_or_setting(_key, "")))
+    st.session_state[_key] = globals()[_key]
+
+with st.sidebar.expander("보조 API 주소 9~19번", expanded=False):
+    for _key, _label in FORCE_API_KEYS[8:]:
+        globals()[_key] = st.text_input(_label, value=str(force_secret_or_setting(_key, "")))
+        st.session_state[_key] = globals()[_key]
+
+st.sidebar.divider()
+use_sample = st.sidebar.checkbox("샘플 데이터 사용", value=False)
+st.session_state["use_sample"] = use_sample
+
+_force_payload = {"api_key": api_key, "target_date": target_date, "track_place": track_place, "target_rc_no": int(target_rc_no)}
+for _key, _label in FORCE_API_KEYS:
+    _force_payload[_key] = globals().get(_key, "")
+
+if st.sidebar.button("API 저장", use_container_width=True):
+    if force_save_settings(_force_payload):
+        st.sidebar.success("API 설정 저장 완료")
+    else:
+        st.sidebar.error("저장 실패")
+
+if st.sidebar.button("추천/비교 로그 초기화", use_container_width=True):
+    for _p in [globals().get("RECO_FILE"), globals().get("COMPARE_FILE"), globals().get("RESULT_FILE")]:
+        try:
+            if _p and _p.exists():
+                _p.unlink()
+        except Exception:
+            pass
+    st.sidebar.warning("로그 초기화 완료")
+
+if st.sidebar.button("API 설정 초기화", use_container_width=True):
+    try:
+        if SETTINGS_FILE.exists():
+            SETTINGS_FILE.unlink()
+        st.sidebar.warning("API 설정 초기화 완료")
+    except Exception:
+        st.sidebar.warning("초기화 시도 완료")
+
+st.sidebar.divider()
+st.sidebar.caption("왼쪽 메뉴가 안 보이면 브라우저 새로고침 또는 좌측 상단 > 아이콘 확인")
+# ===== 강제 사이드바 복구 끝 =====
+
 
 DATA_DIR = Path("maru_kra_data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -372,39 +433,18 @@ def today():
     return today_kst()
 
 
+
 def current_setting_payload():
     payload = {}
-    # 기존 설정값 유지
     try:
         if isinstance(settings, dict):
             payload.update(settings)
     except Exception:
         pass
-
-    # API Key / URL 저장
-    for k in [
-        "api_key",
-        "race_url", "entry_url", "horse_url", "body_url", "gear_url",
-        "rating_url", "odds_url", "today_odds_url", "result_detail_url",
-        "race_record_url", "start_exam_url", "judge_url", "jockey_change_url",
-        "weather_alert_url", "corner_pace_url", "popularity_url",
-        "first_odds_url", "second_odds_url", "third_odds_url"
-    ]:
-        try:
-            payload[k] = globals().get(k, payload.get(k, ""))
-        except Exception:
-            pass
-
-    # 분석 설정 저장
-    for k in [
-        "target_date", "target_rc_no", "track_place",
-        "daily_loss_stop", "daily_entries_limit"
-    ]:
-        try:
-            payload[k] = globals().get(k, payload.get(k, ""))
-        except Exception:
-            pass
-
+    try:
+        payload.update(_force_payload)
+    except Exception:
+        pass
     return payload
 
 def resolve_api_url(var_name, secret_keys=None, default=""):
@@ -816,6 +856,64 @@ third_odds_url = globals().get("third_odds_url", "")
 
 # 샘플데이터 사용 여부 기본값 보강
 use_sample = globals().get("use_sample", False)
+
+
+FORCE_API_KEYS = [
+    ("race_url", "1. 경주정보 URL"),
+    ("entry_url", "2. 출전등록말 URL"),
+    ("horse_url", "3. 경주마정보 URL"),
+    ("body_url", "4. 출전마 체중 URL"),
+    ("gear_url", "5. 장구/폐출혈 URL"),
+    ("rating_url", "6. 레이팅 URL"),
+    ("odds_url", "7. 배당/매출 URL"),
+    ("today_odds_url", "8. 시행당일 배당 URL"),
+    ("result_detail_url", "9. AI 경주결과상세 URL"),
+    ("race_record_url", "10. 경주기록 URL"),
+    ("start_exam_url", "11. 출발심사 URL"),
+    ("judge_url", "12. 경주심판 URL"),
+    ("jockey_change_url", "13. 기수변경 URL"),
+    ("weather_alert_url", "14. 기상특보 URL"),
+    ("corner_pace_url", "15. 코너/주로빠르기 URL"),
+    ("popularity_url", "16. 인기투표 URL"),
+    ("first_odds_url", "17. 1착마 적중승식 URL"),
+    ("second_odds_url", "18. 2착마 적중승식 URL"),
+    ("third_odds_url", "19. 3착마 적중승식 URL"),
+]
+
+def force_secret_or_setting(key, default=""):
+    try:
+        if "settings" in globals() and isinstance(settings, dict):
+            if settings.get(key):
+                return settings.get(key)
+            if settings.get(key.upper()):
+                return settings.get(key.upper())
+    except Exception:
+        pass
+    try:
+        if "maru" in st.secrets:
+            if key in st.secrets["maru"]:
+                return st.secrets["maru"][key]
+            if key.upper() in st.secrets["maru"]:
+                return st.secrets["maru"][key.upper()]
+    except Exception:
+        pass
+    try:
+        if key in st.session_state:
+            return st.session_state[key]
+    except Exception:
+        pass
+    return default
+
+def force_save_settings(payload):
+    try:
+        save_json(SETTINGS_FILE, payload)
+        return True
+    except Exception:
+        try:
+            Path("maru_settings.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            return True
+        except Exception:
+            return False
 
 def get_data():
 
