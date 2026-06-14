@@ -463,11 +463,147 @@ def sheets_status():
     return "Google Sheets 허브 미설정: 로컬 저장만 사용"
 
 
+
+def parse_race_time_value(x):
+    s = str(x or "").strip()
+    if not s:
+        return None
+
+    # Examples: 10:35, 1035, 10시35분, 202606141035
+    digits = re.sub(r"[^0-9]", "", s)
+
+    try:
+        if ":" in s:
+            hh, mm = s.split(":")[:2]
+            return int(hh) * 60 + int(mm[:2])
+    except Exception:
+        pass
+
+    try:
+        if len(digits) >= 12:  # yyyymmddhhmm
+            hh = int(digits[-4:-2])
+            mm = int(digits[-2:])
+            return hh * 60 + mm
+        if len(digits) == 4:
+            hh = int(digits[:2])
+            mm = int(digits[2:])
+            return hh * 60 + mm
+        if len(digits) == 3:
+            hh = int(digits[:1])
+            mm = int(digits[1:])
+            return hh * 60 + mm
+    except Exception:
+        pass
+
+    return None
+
+
+def auto_pick_race_from_schedule(race_df, default_meet, default_rc):
+    """
+    경주정보 API에서 오늘 시간표를 읽어서 현재 한국시간 기준 가장 가까운 경주를 자동 선택.
+    race_df에 시간/경주번호/경마장 컬럼이 없으면 기본값 유지.
+    """
+    if race_df is None or race_df.empty:
+        return default_meet, int(default_rc), "경주정보 API 비어 있음"
+
+    d = race_df.copy()
+
+    # 날짜는 오늘만 우선
+    date_col = find_col(d, ["rcDate", "raceDate", "meetDate", "ymd", "date"])
+    if date_col:
+        try:
+            ds = d[date_col].astype(str).str.replace("-", "", regex=False).str.strip()
+            today_s = today_ymd()
+            only_today = d[ds == today_s]
+            if not only_today.empty:
+                d = only_today
+        except Exception:
+            pass
+
+    time_col = find_col(d, ["rcTime", "raceTime", "출발시각", "출발시간", "time", "startTime"])
+    rc_col = find_col(d, ["rcNo", "raceNo", "경주번호"])
+    meet_col = find_col(d, ["meet", "meetCd", "rcourse", "경마장"])
+
+    if not time_col or not rc_col:
+        return default_meet, int(default_rc), "경주시간/경주번호 컬럼 없음"
+
+    now_min = now_kst().hour * 60 + now_kst().minute
+
+    candidates = []
+    for _, r in d.iterrows():
+        t = parse_race_time_value(r.get(time_col))
+        if t is None:
+            continue
+        try:
+            rc = int(float(r.get(rc_col)))
+        except Exception:
+            continue
+
+        meet = default_meet
+        if meet_col:
+            meet = normalize_meet(r.get(meet_col))
+
+        # 현재 이후 경주 우선, 이미 지난 경주는 다음 후보에서 밀림
+        diff = t - now_min
+        priority = diff if diff >= -3 else diff + 10000
+        candidates.append((priority, diff, meet, rc, t))
+
+    if not candidates:
+        return default_meet, int(default_rc), "시간표 후보 없음"
+
+    candidates.sort(key=lambda x: x[0])
+    _, diff, meet, rc, t = candidates[0]
+    hh, mm = divmod(t, 60)
+    return meet, int(rc), f"자동선택: {meet} {rc}R {hh:02d}:{mm:02d} / 현재차이 {diff}분"
+
+
+def force_analysis_even_if_low(score_df, data):
+    """
+    추천이 관망이어도 분석표는 반드시 보이도록 점수표를 보강.
+    chulNo가 있는 모든 API를 스캔하되, 마번은 1~14만 인정.
+    """
+    if score_df is not None and not score_df.empty:
+        return score_df
+
+    nums = {}
+    evidence = {}
+    for key, df in data.items():
+        if df is None or df.empty:
+            continue
+        col = chul_col(df)
+        if not col:
+            continue
+        tmp = df.copy()
+        tmp["_chulNo"] = pd.to_numeric(tmp[col], errors="coerce")
+        tmp = tmp[tmp["_chulNo"].between(1, 14, inclusive="both")]
+        for _, r in tmp.iterrows():
+            n = int(r["_chulNo"])
+            name = f"{n}번"
+            for nc in ["hrName", "마명", "horseName", "rcName"]:
+                if nc in tmp.columns and pd.notna(r.get(nc, None)) and str(r.get(nc)).strip():
+                    name = str(r.get(nc)).strip()
+                    break
+            nums[n] = name
+            evidence.setdefault(n, set()).add(key)
+
+    rows = []
+    for n in sorted(nums):
+        ev = evidence.get(n, set())
+        rows.append({
+            "마번": n,
+            "마명": nums[n],
+            "점수": 45 + len(ev) * 4,
+            "근거": ",".join(sorted(ev)),
+        })
+    if rows:
+        return pd.DataFrame(rows).sort_values("점수", ascending=False)
+    return pd.DataFrame()
+
 settings = read_json(SETTINGS_FILE, {})
 
 st.title("🐎 MARU KRA FULL 19API REALTIME")
 st.caption(f"한국시간: {now_text()} / 분석 날짜: {today_ymd()}")
-st.info("전체 1~19번 API 실시간 호출판입니다. API가 실제 데이터를 반환하면 즉시 분석에 반영합니다.")
+st.info("전체 1~19번 API 실시간 호출 + 경주시간표 기준 자동 경마장/경주 선택 + chulNo 분석판입니다.")
 
 # Sidebar
 st.sidebar.title("🐎 MARU KRA 메뉴")
@@ -494,6 +630,9 @@ target_rc_no = st.sidebar.number_input(
     value=int(get_setting(settings, "target_rc_no", 1) or 1),
     step=1,
 )
+
+auto_schedule_pick = st.sidebar.checkbox("경주시간표 기준 자동 경마장/경주 선택", value=True)
+st.sidebar.caption("경주정보 API가 시간표를 주면 현재 한국시간 기준 다음 경주를 자동 선택합니다.")
 
 strict_filter = st.sidebar.checkbox("현재 경주 필터 엄격 적용", value=False)
 add_filter_params = st.sidebar.checkbox("URL에 rcDate/meet/rcNo 자동 추가", value=False, help="HTTP 500이 늘면 OFF")
@@ -561,27 +700,57 @@ load_clicked = st.button("실시간 데이터 불러오기", use_container_width
 if load_clicked or auto_refresh > 0:
     data = {}
     errors = []
+
+    selected_track = track_place
+    selected_rc = int(target_rc_no)
+    schedule_msg = "수동 선택"
+
+    # 1단계: 경주정보 API 먼저 호출해서 시간표 기반 자동 선택
+    race_full = build_url(
+        api_urls.get("race", ""),
+        api_key,
+        target_date,
+        track_place,
+        target_rc_no,
+        add_filter_params=add_filter_params,
+    )
+    race_df, race_err = fetch_api("race", race_full)
+    if race_err:
+        errors.append(race_err)
+
+    if auto_schedule_pick and race_df is not None and not race_df.empty:
+        selected_track, selected_rc, schedule_msg = auto_pick_race_from_schedule(race_df, track_place, target_rc_no)
+
+    st.session_state["selected_track"] = selected_track
+    st.session_state["selected_rc"] = selected_rc
+    st.session_state["schedule_msg"] = schedule_msg
+
+    # 2단계: 선택된 경마장/경주번호 기준으로 1~19번 전체 호출
     for api_name, key, label in API_ITEMS:
         full = build_url(
             api_urls.get(api_name, ""),
             api_key,
             target_date,
-            track_place,
-            target_rc_no,
+            selected_track,
+            selected_rc,
             add_filter_params=add_filter_params,
         )
         df, err = fetch_api(api_name, full)
         if df is not None and not df.empty:
-            df = filter_current(df, target_date, track_place, target_rc_no, strict_filter)
+            df = filter_current(df, target_date, selected_track, selected_rc, strict_filter)
         data[api_name] = df
         if err:
             errors.append(err)
+
     st.session_state["data"] = data
     st.session_state["errors"] = errors
     st.session_state["last_loaded"] = now_text()
 
 data = st.session_state["data"]
 errors = st.session_state["errors"]
+selected_track = st.session_state.get("selected_track", track_place)
+selected_rc = st.session_state.get("selected_rc", int(target_rc_no))
+schedule_msg = st.session_state.get("schedule_msg", "수동 선택")
 
 env = {
     "weather": manual_weather,
@@ -591,6 +760,7 @@ env = {
 }
 
 score_df = valid_chulno_base(data)
+score_df = force_analysis_even_if_low(score_df, data)
 score_df = add_context_scores(score_df, data)
 sim_df = simulate(score_df)
 result = make_result(score_df, sim_df, data, env)
@@ -599,11 +769,12 @@ connected_rows = sum(len(v) for v in data.values() if isinstance(v, pd.DataFrame
 connected_apis = sum(1 for v in data.values() if isinstance(v, pd.DataFrame) and len(v) > 0)
 
 m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("연결 API", f"{connected_apis}/19")
-m2.metric("연결 행수", connected_rows)
-m3.metric("신뢰도", f"{result['신뢰도']}%")
-m4.metric("추천금액", f"{result['추천금액']:,}원")
+m1.metric("자동 선택", f"{selected_track} {selected_rc}R")
+m2.metric("연결 API", f"{connected_apis}/19")
+m3.metric("연결 행수", connected_rows)
+m4.metric("신뢰도", f"{result['신뢰도']}%")
 m5.metric("마지막 수집", st.session_state.get("last_loaded", "-")[-8:] if st.session_state.get("last_loaded") else "-")
+st.caption(f"경주시간표 선택 상태: {schedule_msg}")
 
 if errors:
     st.warning(f"오류/미응답 API {len(errors)}개. 정상 연결 API만 분석에 반영합니다.")
@@ -662,7 +833,9 @@ with tab1:
         st.dataframe(pd.DataFrame(ex), use_container_width=True)
 
 with tab2:
-    st.caption("body/gear/today_odds/first_odds/third_odds/popularity의 chulNo만 실제 마번으로 사용합니다.")
+    st.caption("body/gear/today_odds/first_odds/third_odds/popularity 등 chulNo가 있는 API는 모두 분석 점수에 반영합니다.")
+    if score_df is None or score_df.empty:
+        st.warning("현재 선택 경주에서 chulNo 마번 데이터가 아직 없습니다. API 연결 탭에서 chulNo컬럼을 확인하세요.")
     st.dataframe(score_df, use_container_width=True, height=520)
 
 with tab3:
