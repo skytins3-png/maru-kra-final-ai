@@ -84,6 +84,19 @@ def force_secret_or_setting(key, default=""):
                 return settings.get(key.upper())
     except Exception:
         pass
+    # 기존 앱에서 저장했던 설정 파일도 자동으로 읽습니다.
+    # Streamlit에 재배포해도 키/URL을 화면에 다시 입력하지 않기 위한 보강입니다.
+    try:
+        for _settings_path in [Path("maru_settings.json"), Path("maru_kra_data/api_settings.json")]:
+            if _settings_path.exists():
+                _data = json.loads(_settings_path.read_text(encoding="utf-8"))
+                if isinstance(_data, dict):
+                    if _data.get(key):
+                        return _data.get(key)
+                    if _data.get(key.upper()):
+                        return _data.get(key.upper())
+    except Exception:
+        pass
     try:
         if "maru" in st.secrets:
             if key in st.secrets["maru"]:
@@ -119,18 +132,18 @@ st.set_page_config(page_title="MARU KRA FORCE SIDEBAR", layout="wide", initial_s
 # ===== 강제 사이드바 복구 영역 =====
 st.sidebar.title("🐎 MARU KRA 메뉴")
 st.sidebar.caption("사이드바 강제 복구판")
-st.sidebar.success("API URL은 기본값 자동 입력 / API Key는 Secrets에서 자동 불러오기")
+st.sidebar.success("API URL/Key 자동 적용 모드: 화면 입력 없음")
 
-api_key = st.sidebar.text_input(
-    "공공데이터 API Key",
-    value=str(force_secret_or_setting("api_key", force_secret_or_setting("API_KEY", ""))),
-    type="password"
-)
+api_key = str(force_secret_or_setting("api_key", force_secret_or_setting("API_KEY", ""))).strip()
 st.session_state["api_key"] = api_key
+if api_key:
+    st.sidebar.success("공공데이터 API Key 자동 적용 완료")
+else:
+    st.sidebar.warning("API Key가 Secrets/기존 설정에 없습니다. Streamlit Secrets에 API_KEY를 1회 저장하세요.")
 
 st.sidebar.divider()
 st.sidebar.subheader("분석 기준")
-target_date = st.sidebar.text_input("분석 날짜", value=str(force_secret_or_setting("target_date", today() if "today" in globals() else "")))
+target_date = st.sidebar.text_input("분석 날짜", value=str(force_secret_or_setting("target_date", today_kst())))
 track_place = st.sidebar.selectbox("경마장", ["서울", "부산경남", "제주"], index=["서울", "부산경남", "제주"].index(str(force_secret_or_setting("track_place", "서울"))) if str(force_secret_or_setting("track_place", "서울")) in ["서울", "부산경남", "제주"] else 0)
 target_rc_no = st.sidebar.number_input("경주번호", min_value=1, max_value=20, value=int(force_secret_or_setting("target_rc_no", 1) or 1), step=1)
 strict_race_filter = st.sidebar.checkbox("선택 경주만 엄격 필터", value=False)
@@ -148,15 +161,18 @@ API_KEY = "공공데이터_API_KEY"
 """, language="toml")
 
 st.sidebar.divider()
-st.sidebar.subheader("핵심 API 주소")
-for _key, _label in FORCE_API_KEYS[:8]:
-    globals()[_key] = st.sidebar.text_input(_label, value=str(force_secret_or_setting(_key, "")))
+st.sidebar.subheader("실시간 API 자동 연결")
+_auto_api_ok = 0
+for _key, _label in FORCE_API_KEYS:
+    globals()[_key] = str(force_secret_or_setting(_key, "")).strip()
     st.session_state[_key] = globals()[_key]
-
-with st.sidebar.expander("보조 API 주소 9~19번", expanded=False):
-    for _key, _label in FORCE_API_KEYS[8:]:
-        globals()[_key] = st.text_input(_label, value=str(force_secret_or_setting(_key, "")))
-        st.session_state[_key] = globals()[_key]
+    if globals()[_key]:
+        _auto_api_ok += 1
+st.sidebar.success(f"API 주소 자동 적용: {_auto_api_ok}/{len(FORCE_API_KEYS)}개")
+with st.sidebar.expander("자동 적용된 API 상태", expanded=False):
+    for _key, _label in FORCE_API_KEYS:
+        st.write(("✅" if globals()[_key] else "⚠️") + " " + _label)
+    st.caption("URL은 앱 기본값/Secrets/기존 설정에서 자동 적용됩니다. 화면에서 다시 입력하지 않습니다.")
 
 st.sidebar.divider()
 use_sample = st.sidebar.checkbox("샘플 데이터 사용", value=False)
@@ -175,8 +191,30 @@ st.session_state["manual_track"] = manual_track
 st.session_state["manual_sand"] = manual_sand
 st.session_state["manual_wind"] = manual_wind
 
+st.sidebar.divider()
+st.sidebar.subheader("거리/경주 분석 설정")
+distance_type = st.sidebar.selectbox("거리 유형", ["단거리", "중거리", "장거리"], index=1)
+race_distance = st.sidebar.number_input("경주 거리(m)", min_value=800, max_value=3200, value=1200, step=100)
+pace_type = st.sidebar.selectbox("전개 예상", ["빠름", "보통", "느림"], index=1)
+track_bias = st.sidebar.selectbox("주로 편향", ["없음", "안쪽 유리", "바깥 유리", "선행 유리", "추입 유리"], index=0)
+st.session_state["distance_type"] = distance_type
+st.session_state["race_distance"] = race_distance
+st.session_state["pace_type"] = pace_type
+st.session_state["track_bias"] = track_bias
 
-_force_payload = {"api_key": api_key, "target_date": target_date, "track_place": track_place, "target_rc_no": int(target_rc_no)}
+st.sidebar.divider()
+st.sidebar.subheader("자금/저장 설정")
+daily_loss_stop = st.sidebar.number_input("하루 손실 제한", min_value=0, max_value=1000000, value=30000, step=1000)
+daily_entries_limit = st.sidebar.number_input("오늘 진입 제한", min_value=0, max_value=20, value=3, step=1)
+auto_save_reco = st.sidebar.checkbox("추천 자동 저장", value=True)
+st.session_state["daily_loss_stop"] = daily_loss_stop
+st.session_state["daily_entries_limit"] = daily_entries_limit
+st.session_state["auto_save_reco"] = auto_save_reco
+
+
+
+
+_force_payload = {"api_key": api_key, "target_date": target_date, "track_place": track_place, "target_rc_no": int(target_rc_no), "distance_type": distance_type, "race_distance": int(race_distance), "pace_type": pace_type, "track_bias": track_bias}
 for _key, _label in FORCE_API_KEYS:
     _force_payload[_key] = globals().get(_key, "")
 
@@ -195,7 +233,7 @@ if st.sidebar.button("추천/비교 로그 초기화", use_container_width=True)
             pass
     st.sidebar.warning("로그 초기화 완료")
 
-if st.sidebar.button("API 설정 초기화", use_container_width=True):
+if st.sidebar.button("로컬 설정 초기화", use_container_width=True):
     try:
         if SETTINGS_FILE.exists():
             SETTINGS_FILE.unlink()
@@ -1438,7 +1476,26 @@ def hub_read_recent(title, limit=100):
         return pd.DataFrame()
     return df.tail(limit)
 
+
+# 분석/거리 변수 기본값 보강
+distance_type = globals().get("distance_type", "중거리")
+race_distance = globals().get("race_distance", 1200)
+pace_type = globals().get("pace_type", "보통")
+track_bias = globals().get("track_bias", "없음")
+
 def env_bonus(row, env):
+    distance_type = globals().get("distance_type", "중거리")
+    race_distance = globals().get("race_distance", 1200)
+    pace_type = globals().get("pace_type", "보통")
+    track_bias = globals().get("track_bias", "없음")
+    try:
+        distance_type = st.session_state.get("distance_type", distance_type)
+        race_distance = st.session_state.get("race_distance", race_distance)
+        pace_type = st.session_state.get("pace_type", pace_type)
+        track_bias = st.session_state.get("track_bias", track_bias)
+    except Exception:
+        pass
+
     front = float(row.get("선행력", 70))
     late = float(row.get("추입력", 70))
     power = float(row.get("파워", 70))
@@ -1499,6 +1556,13 @@ def build_candidate_base_from_all(data):
         return pd.DataFrame([{"마번": n, "마명": names.get(n, f"{n}번")} for n in sorted(nums)])
 
     return pd.DataFrame()
+
+
+# 기타 분석 변수 기본값 보강
+sim_count = globals().get("sim_count", 100)
+daily_loss_stop = globals().get("daily_loss_stop", 30000)
+daily_entries_limit = globals().get("daily_entries_limit", 3)
+auto_save_reco = globals().get("auto_save_reco", True)
 
 def analyze(data, env):
     base = normalize_horse(data.get("entry", pd.DataFrame()))
