@@ -3,6 +3,8 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
+import hashlib
+import traceback
 import random
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -10,9 +12,9 @@ from datetime import datetime
 from collections import Counter
 
 st.set_page_config(
-    page_title="MARU KRA SECRETS AUTOLOAD",
+    page_title="MARU KRA PC DASHBOARD",
     page_icon="🐎",
-    layout="centered"
+    layout="wide"
 )
 
 DATA_DIR = Path("maru_kra_data")
@@ -161,7 +163,163 @@ def save_json(path, data):
     except Exception:
         pass
 
+
+def sheets_secret_get(names, default=""):
+    try:
+        if "google_sheets" in st.secrets:
+            for n in names:
+                if n in st.secrets["google_sheets"]:
+                    return st.secrets["google_sheets"][n]
+        for n in names:
+            if n in st.secrets:
+                return st.secrets[n]
+    except Exception:
+        pass
+    return default
+
+def sheets_enabled():
+    return bool(sheets_secret_get(["SHEET_ID", "sheet_id"], ""))
+
+def get_gsheet_client():
+    """
+    Streamlit Secrets의 [google_sheets] 서비스계정 JSON으로 Google Sheets 연결.
+    없거나 실패하면 None 반환하고 앱은 로컬 CSV로 계속 작동.
+    """
+    if not sheets_enabled():
+        return None, "Google Sheets 미설정"
+
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+
+        # 방법 1: SERVICE_ACCOUNT_JSON 전체를 TOML multiline string으로 저장
+        raw = sheets_secret_get(["SERVICE_ACCOUNT_JSON", "service_account_json"], "")
+        if raw:
+            if isinstance(raw, str):
+                info = json.loads(raw)
+            else:
+                info = dict(raw)
+        else:
+            # 방법 2: [google_sheets.service_account] 형태의 TOML table
+            info = {}
+            try:
+                if "google_sheets" in st.secrets and "service_account" in st.secrets["google_sheets"]:
+                    info = dict(st.secrets["google_sheets"]["service_account"])
+            except Exception:
+                info = {}
+
+        if not info:
+            return None, "서비스계정 정보 없음"
+
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client, ""
+    except Exception as e:
+        return None, "Google Sheets 연결 실패: " + str(e)
+
+def get_sheet_workbook():
+    client, err = get_gsheet_client()
+    if client is None:
+        return None, err
+    try:
+        sheet_id = str(sheets_secret_get(["SHEET_ID", "sheet_id"], "")).strip()
+        if not sheet_id:
+            return None, "SHEET_ID 없음"
+        return client.open_by_key(sheet_id), ""
+    except Exception as e:
+        return None, "시트 열기 실패: " + str(e)
+
+def get_or_create_ws(wb, title, headers):
+    try:
+        ws = wb.worksheet(title)
+    except Exception:
+        ws = wb.add_worksheet(title=title, rows=1000, cols=max(20, len(headers) + 5))
+        ws.append_row(headers)
+        return ws
+
+    try:
+        first = ws.row_values(1)
+        if not first:
+            ws.append_row(headers)
+    except Exception:
+        pass
+    return ws
+
+def df_from_worksheet(title, headers):
+    wb, err = get_sheet_workbook()
+    if wb is None:
+        return pd.DataFrame(), err
+    try:
+        ws = get_or_create_ws(wb, title, headers)
+        records = ws.get_all_records()
+        return pd.DataFrame(records), ""
+    except Exception as e:
+        return pd.DataFrame(), "시트 읽기 실패: " + str(e)
+
+def append_sheet_row(title, row, headers):
+    wb, err = get_sheet_workbook()
+    if wb is None:
+        return False, err
+    try:
+        ws = get_or_create_ws(wb, title, headers)
+        all_headers = ws.row_values(1)
+        if not all_headers:
+            all_headers = headers
+            ws.append_row(all_headers)
+
+        # 새 컬럼이 생기면 헤더 확장
+        changed = False
+        for k in row.keys():
+            if k not in all_headers:
+                all_headers.append(k)
+                changed = True
+        if changed:
+            ws.update("1:1", [all_headers])
+
+        values = [row.get(h, "") for h in all_headers]
+        ws.append_row(values, value_input_option="USER_ENTERED")
+        return True, ""
+    except Exception as e:
+        return False, "시트 저장 실패: " + str(e)
+
+def file_to_sheet_title(path):
+    name = str(path)
+    if "recommendation" in name:
+        return "recommendations"
+    if "compare" in name:
+        return "comparisons"
+    if "result" in name:
+        return "results"
+    return "logs"
+
+def default_headers_for_path(path):
+    title = file_to_sheet_title(path)
+    if title == "recommendations":
+        return ["저장시각","날짜","경마장","경주번호","출발시간","판정","공격삼쌍승","방어삼복승","보조삼쌍승","예상배당","신뢰도","추천금액","오늘손익","누적손익","날씨","주로","모래","바람"]
+    if title == "comparisons":
+        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","실제삼쌍","실제삼복","투입금","환급금","수익률","분석결과","메모"]
+    if title == "results":
+        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","투입금","환급금","수익률","분석결과","메모"]
+    return ["저장시각","내용"]
+
+
 def read_table(path):
+    # Google Sheets가 설정되어 있으면 PC/모바일 공용 기록을 우선 읽음
+    try:
+        if sheets_enabled():
+            title = file_to_sheet_title(path)
+            headers = default_headers_for_path(path)
+            df, err = df_from_worksheet(title, headers)
+            if not df.empty:
+                return df
+    except Exception:
+        pass
+
     if path.exists():
         try:
             return pd.read_csv(path)
@@ -169,8 +327,29 @@ def read_table(path):
             return pd.DataFrame()
     return pd.DataFrame()
 
+
 def append_table(path, row):
-    df = read_table(path)
+    # 1) Google Sheets 저장: PC/모바일 공용
+    try:
+        if sheets_enabled():
+            title = file_to_sheet_title(path)
+            headers = default_headers_for_path(path)
+            ok, err = append_sheet_row(title, row, headers)
+            if not ok:
+                st.warning("Google Sheets 저장 실패: " + str(err))
+    except Exception as e:
+        try:
+            st.warning("Google Sheets 저장 중 오류: " + str(e))
+        except Exception:
+            pass
+
+    # 2) 로컬 CSV도 백업 저장
+    df = pd.DataFrame()
+    if path.exists():
+        try:
+            df = pd.read_csv(path)
+        except Exception:
+            df = pd.DataFrame()
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     df.to_csv(path, index=False, encoding="utf-8-sig")
     return df
@@ -182,10 +361,48 @@ settings = load_settings()
 weights = load_local_json(WEIGHT_FILE, DEFAULT_WEIGHTS)
 save_json(WEIGHT_FILE, weights)
 
-st.title("🐎 MARU KRA AI")
-st.caption("Secrets 자동불러오기 · API Key 숨김 · 현재 경주 부족 시 관망")
+st.title("🐎 MARU KRA AI — PC 대시보드")
+
+st.markdown("""
+<style>
+.block-container {
+    padding-top: 1.2rem;
+    padding-bottom: 2rem;
+    max-width: 1500px;
+}
+[data-testid="stMetricValue"] {
+    font-size: 1.6rem;
+}
+div[data-testid="stVerticalBlock"] {
+    gap: 0.65rem;
+}
+.stButton > button {
+    height: 2.5rem;
+}
+section[data-testid="stSidebar"] {
+    min-width: 360px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.caption("PC/모바일 공용 허브 · 실시간 API 수집 · Google Sheets 저장/불러오기 · chulNo 우선 분석")
+st.info("허브 실시간 구조: API 수집 → Google Sheets 허브 저장 → PC/모바일 불러오기 → 분석/추천/학습")
 
 st.sidebar.header("MARU KRA 저장형")
+
+st.sidebar.subheader("Google Sheets 연동 상태")
+
+st.sidebar.subheader("허브 실시간 동기화")
+auto_hub_sync = st.sidebar.checkbox("분석 후 허브 자동저장", value=True)
+hub_read_mode = st.sidebar.checkbox("허브 기록 불러오기", value=True)
+if sheets_enabled():
+    wb_test, wb_err = get_sheet_workbook()
+    if wb_test is not None:
+        st.sidebar.success("Google Sheets 연결됨")
+    else:
+        st.sidebar.warning(wb_err)
+else:
+    st.sidebar.info("Sheets 미설정: 로컬 저장 사용")
 if any(secret_get(names, "") for names in SECRET_MAP.values()):
     st.sidebar.success("Secrets 값 자동 불러옴")
 else:
@@ -733,6 +950,128 @@ def current_race_ready(result):
         return False
     return True
 
+
+def hub_headers(title):
+    common_time = ["저장시각","날짜","경마장","경주번호"]
+    if title == "api_status":
+        return common_time + ["API","행수","컬럼수","마번후보","상태"]
+    if title == "score_snapshots":
+        return common_time + ["마번","마명","점수","순위","근거"]
+    if title == "hub_status":
+        return ["저장시각","날짜","경마장","경주번호","연결데이터","추천","판정","상태"]
+    if title == "recommendations":
+        return ["저장시각","날짜","경마장","경주번호","출발시간","판정","공격삼쌍승","방어삼복승","보조삼쌍승","예상배당","신뢰도","추천금액","오늘손익","누적손익","날씨","주로","모래","바람"]
+    if title == "comparisons":
+        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","실제삼쌍","실제삼복","투입금","환급금","수익률","분석결과","메모"]
+    if title == "results":
+        return ["저장시각","날짜","경마장","경주번호","공격삼쌍승","투입금","환급금","수익률","분석결과","메모"]
+    return ["저장시각","내용"]
+
+def safe_target_date():
+    try:
+        return str(target_date)
+    except Exception:
+        return today()
+
+def safe_target_rc():
+    try:
+        return int(target_rc_no)
+    except Exception:
+        try:
+            return result.get("경주번호","")
+        except Exception:
+            return ""
+
+def hub_append(title, row):
+    if not sheets_enabled():
+        return False, "Google Sheets 미설정"
+    return append_sheet_row(title, row, hub_headers(title))
+
+def hub_sync_now(data, score_df, result):
+    """
+    실시간 API 수집 결과와 분석 결과를 허브에 저장.
+    같은 실행에서 같은 추천은 중복 저장하지 않도록 session_state key 사용.
+    """
+    if not sheets_enabled():
+        return False, "Google Sheets 미설정"
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    d = safe_target_date()
+    rc = safe_target_rc()
+    try:
+        place = track_place
+    except Exception:
+        place = ""
+
+    try:
+        total_rows = sum(len(v) for v in data.values() if v is not None)
+    except Exception:
+        total_rows = 0
+
+    rec = ""
+    judge = ""
+    try:
+        rec = result.get("공격삼쌍승","")
+        judge = result.get("판정","")
+    except Exception:
+        pass
+
+    sync_key = hashlib.md5(f"{d}-{place}-{rc}-{total_rows}-{rec}-{judge}".encode("utf-8")).hexdigest()
+    if st.session_state.get("_hub_last_sync_key") == sync_key:
+        return True, "이미 동기화됨"
+
+    # 1. API 연결 상태 저장
+    for k, v in data.items():
+        try:
+            rows = len(v) if v is not None else 0
+            cols = len(v.columns) if v is not None and not v.empty else 0
+            hcol = ""
+            try:
+                hcol = str(horse_no_col(v)) if v is not None and not v.empty else ""
+            except Exception:
+                hcol = ""
+            hub_append("api_status", {
+                "저장시각": now, "날짜": d, "경마장": place, "경주번호": rc,
+                "API": k, "행수": rows, "컬럼수": cols, "마번후보": hcol,
+                "상태": "OK" if rows > 0 else "EMPTY"
+            })
+        except Exception:
+            pass
+
+    # 2. 말별 점수 상위 저장
+    try:
+        if score_df is not None and not score_df.empty:
+            tmp = score_df.copy().head(30)
+            for idx, r in tmp.iterrows():
+                row = {
+                    "저장시각": now, "날짜": d, "경마장": place, "경주번호": rc,
+                    "마번": r.get("마번",""),
+                    "마명": r.get("마명",""),
+                    "점수": r.get("점수", r.get("score","")),
+                    "순위": int(idx) + 1,
+                    "근거": r.get("근거", r.get("reason",""))
+                }
+                hub_append("score_snapshots", row)
+    except Exception:
+        pass
+
+    # 3. 허브 상태 저장
+    hub_append("hub_status", {
+        "저장시각": now, "날짜": d, "경마장": place, "경주번호": rc,
+        "연결데이터": total_rows, "추천": rec, "판정": judge, "상태": "SYNCED"
+    })
+
+    st.session_state["_hub_last_sync_key"] = sync_key
+    return True, "허브 동기화 완료"
+
+def hub_read_recent(title, limit=100):
+    if not sheets_enabled():
+        return pd.DataFrame()
+    df, err = df_from_worksheet(title, hub_headers(title))
+    if df is None or df.empty:
+        return pd.DataFrame()
+    return df.tail(limit)
+
 def env_bonus(row, env):
     front = float(row.get("선행력", 70))
     late = float(row.get("추입력", 70))
@@ -1028,6 +1367,42 @@ m1.metric("연결 데이터", rows)
 m2.metric("추천 저장", len(reco_df))
 m3.metric("비교 저장", len(compare_df))
 
+
+st.divider()
+pc_left, pc_mid, pc_right = st.columns([1.15, 1.4, 1.0])
+
+with pc_left:
+    st.subheader("현재 선택")
+    try:
+        st.write(f"**날짜:** {target_date}")
+        st.write(f"**경마장:** {track_place}")
+        st.write(f"**경주번호:** {int(target_rc_no)}R")
+        if "strict_race_filter" in globals():
+            st.write(f"**엄격 필터:** {strict_race_filter}")
+    except Exception:
+        st.write(f"**경마장:** {track_place}")
+
+with pc_mid:
+    st.subheader("추천 핵심")
+    try:
+        st.write(f"**판정:** {result.get('판정','대기')}")
+        st.write(f"**공격 삼쌍승:** {result.get('공격삼쌍승','-')}")
+        st.write(f"**방어 삼복승:** {result.get('방어삼복승','-')}")
+        st.write(f"**추천금액:** {result.get('추천금액',0):,}원")
+    except Exception:
+        st.write("분석 대기")
+
+with pc_right:
+    st.subheader("운영 상태")
+    try:
+        st.write(f"**오늘손익:** {result.get('오늘손익',0):,}원")
+        st.write(f"**누적손익:** {result.get('누적손익',0):,}원")
+        st.write(f"**자금상태:** {result.get('자금상태','-')}")
+        st.write(f"**기상특보:** {result.get('기상특보위험',0)}")
+    except Exception:
+        st.write("운영 상태 대기")
+
+st.divider()
 if errors:
     st.warning(f"보조 API 오류 {len(errors)}개. 핵심 데이터가 있으면 분석은 계속됩니다.")
     with st.expander("오류 상세 보기"):
@@ -1158,3 +1533,95 @@ with st.expander("숨겨진 분석 / 저장 데이터"):
     }.items():
         examples.append({"API":name, "요청URL":mask_secret_url(build_api_url(url))})
     st.dataframe(pd.DataFrame(examples), use_container_width=True)
+
+
+
+st.divider()
+st.subheader("PC 상세 분석 패널")
+
+tab_score, tab_sim, tab_api, tab_logs = st.tabs(["말별 점수표", "삼쌍승 시뮬레이션", "API 원본/진단", "과거 로그"])
+
+with tab_score:
+    try:
+        st.dataframe(score_df, use_container_width=True, height=420)
+    except Exception:
+        st.write("점수표 없음")
+
+with tab_sim:
+    try:
+        st.dataframe(pd.DataFrame(combos), use_container_width=True, height=360)
+    except Exception:
+        st.write("시뮬레이션 없음")
+
+with tab_api:
+    try:
+        api_rows = []
+        for k, v in data.items():
+            api_rows.append({
+                "API": k,
+                "행수": len(v) if v is not None else 0,
+                "컬럼수": len(v.columns) if v is not None and not v.empty else 0,
+                "마번후보": str(horse_no_col(v)) if v is not None and not v.empty else ""
+            })
+        st.dataframe(pd.DataFrame(api_rows), use_container_width=True, height=360)
+        if "entry" in data and not data["entry"].empty:
+            st.write("2번 출전 등록말 원본 미리보기")
+            st.dataframe(data["entry"].head(50), use_container_width=True, height=360)
+    except Exception:
+        st.write("API 진단 표시 실패")
+
+with tab_logs:
+    try:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.write("과거 추천 로그")
+            st.dataframe(read_table(RECO_FILE).tail(100), use_container_width=True, height=360)
+        with col_b:
+            st.write("과거 예상 vs 실제 비교 로그")
+            st.dataframe(read_table(COMPARE_FILE).tail(100), use_container_width=True, height=360)
+    except Exception:
+        st.write("로그 없음")
+
+
+
+st.divider()
+st.subheader("허브 실시간 패널")
+try:
+    if sheets_enabled():
+        st.success("Google Sheets 허브 사용 중: PC/모바일 기록 공유")
+    else:
+        st.info("Google Sheets 허브 미설정: 현재는 로컬 저장만 사용")
+except Exception:
+    st.info("허브 상태 확인 대기")
+
+hub_tab1, hub_tab2, hub_tab3 = st.tabs(["허브 상태", "허브 점수 기록", "허브 추천/비교"])
+
+with hub_tab1:
+    try:
+        if hub_read_mode:
+            st.dataframe(hub_read_recent("hub_status", 100), use_container_width=True, height=320)
+        else:
+            st.write("허브 불러오기 OFF")
+    except Exception:
+        st.write("허브 상태 없음")
+
+with hub_tab2:
+    try:
+        if hub_read_mode:
+            st.dataframe(hub_read_recent("score_snapshots", 100), use_container_width=True, height=420)
+        else:
+            st.write("허브 불러오기 OFF")
+    except Exception:
+        st.write("허브 점수 기록 없음")
+
+with hub_tab3:
+    try:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.write("허브 추천 기록")
+            st.dataframe(hub_read_recent("recommendations", 100), use_container_width=True, height=360)
+        with c2:
+            st.write("허브 비교 기록")
+            st.dataframe(hub_read_recent("comparisons", 100), use_container_width=True, height=360)
+    except Exception:
+        st.write("허브 추천/비교 기록 없음")
