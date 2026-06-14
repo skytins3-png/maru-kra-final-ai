@@ -7,7 +7,7 @@ import itertools
 import re
 import requests
 
-st.set_page_config(page_title="MARU KRA 안정 롤백", page_icon="🐎", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MARU KRA 안정 부팅 복구", page_icon="🐎", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -261,7 +261,7 @@ if "auto_load_log" not in st.session_state:
 if "alarm_on" not in st.session_state:
     st.session_state.alarm_on = False
 if "review_records" not in st.session_state:
-    st.session_state.review_records = detailed_review_records_default()
+    st.session_state.review_records = detailed_review_records_default() if 'detailed_review_records_default' in globals() else []
 
 if "race_results" not in st.session_state:
     st.session_state.race_results = pd.DataFrame(columns=[
@@ -1739,6 +1739,18 @@ def render_kra_result_enhanced_panel():
         else:
             st.warning(f"KRA 결과표 자동수집 실패 또는 표 없음: {msg}")
             st.info("이 경우 결과문구 한 줄 붙여넣기 방식이 가장 안정적인 백업입니다.")
+
+
+def send_telegram_message_safe(token="", chat_id="", text=""):
+    try:
+        if not token or not chat_id or not text:
+            return False
+        import requests
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.post(url, data={"chat_id": chat_id, "text": text}, timeout=5)
+        return True
+    except Exception:
+        return False
 
 def send_telegram_alert(text):
     if not external_alert_ready or not telegram_bot_token or not telegram_chat_id:
