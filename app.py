@@ -25,6 +25,7 @@ DATA_DIR = Path("maru_kra_data")
 DATA_DIR.mkdir(exist_ok=True)
 LOCAL_HUB_FILE = DATA_DIR / "maru_kra_hub_records.csv"
 API_STATUS_FILE = DATA_DIR / "maru_kra_api_status.csv"
+LOCAL_SETTINGS_FILE = DATA_DIR / "maru_kra_local_settings.json"
 
 # 사용자가 올린 NO_REINPUT 원본 ZIP에서 추출한 실제 API 기본 URL
 FORCE_DEFAULT_URLS = {'race_url': 'https://apis.data.go.kr/B551015/API186_1/SeoulRace_1', 'entry_url': 'https://apis.data.go.kr/B551015/API23_1/entryRaceHorse_1', 'horse_url': 'https://apis.data.go.kr/B551015/API310/raceHorseInfo', 'body_url': 'https://apis.data.go.kr/B551015/API25_1/raceHorseBody', 'gear_url': 'https://apis.data.go.kr/B551015/API24_1/raceHorseGear', 'rating_url': 'https://apis.data.go.kr/B551015/API77/raceHorseRating', 'odds_url': 'https://apis.data.go.kr/B551015/API28_1/Dividend_rate', 'today_odds_url': 'https://apis.data.go.kr/B551015/API301/Dividend_rate_total', 'result_detail_url': 'https://apis.data.go.kr/B551015/API299_1/raceResultDetail_1', 'race_record_url': 'https://apis.data.go.kr/B551015/API214_1/raceRecord_1', 'start_exam_url': 'https://apis.data.go.kr/B551015/API76_1/startExamResult_1', 'judge_url': 'https://apis.data.go.kr/B551015/API72_1/raceJudge_1', 'jockey_change_url': 'https://apis.data.go.kr/B551015/API71_1/jockeyChange_1', 'weather_alert_url': 'https://apis.data.go.kr/1360000/WthrWrnInfoService/getPwnStatus', 'corner_pace_url': 'https://apis.data.go.kr/B551015/API303/corner_rank', 'popularity_url': 'https://apis.data.go.kr/B551015/API302/popularity', 'first_odds_url': 'https://apis.data.go.kr/B551015/API27_1/winPredictionRateInfo_1', 'second_odds_url': 'https://apis.data.go.kr/B551015/API29_1/doublePredictionRateInfo_1', 'third_odds_url': 'https://apis.data.go.kr/B551015/API30_1/triplePredictionRateInfo_1'}
@@ -80,8 +81,35 @@ def secret_get(names, default=""):
             return str(val)
     return default
 
+def load_local_settings():
+    try:
+        if LOCAL_SETTINGS_FILE.exists():
+            return json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def save_local_settings(payload):
+    try:
+        current = load_local_settings()
+        current.update(payload)
+        LOCAL_SETTINGS_FILE.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
 def get_api_key():
-    # 화면 입력 없음. Secrets / 환경변수에서만 자동 로드.
+    # 우선순위: 화면에서 저장한 값 → Streamlit Secrets → 환경변수
+    try:
+        if st.session_state.get("api_key_saved"):
+            return str(st.session_state.get("api_key_saved", "")).strip()
+    except Exception:
+        pass
+
+    local = load_local_settings()
+    if local.get("api_key"):
+        return str(local.get("api_key", "")).strip()
+
     return secret_get(["API_KEY", "api_key", "PUBLIC_DATA_API_KEY", "SERVICE_KEY", "serviceKey"], "")
 
 API_KEY = get_api_key()
@@ -602,18 +630,37 @@ def render():
     st.markdown("""
 <div class="hero">
 <h2>🏇 MARU KRA 실시간 19API HUB</h2>
-<div class="muted">키/URL 재입력 없음 · 원본 NO_REINPUT API 주소 유지 · 실시간 호출 · 모바일/PC 허브 저장/불러오기</div>
+<div class="muted">API Key 저장 입력란 · 원본 NO_REINPUT API 주소 유지 · 한국시간 KST · 모바일/PC 허브 저장/불러오기</div>
 </div>
 """, unsafe_allow_html=True)
 
     with st.sidebar:
         st.title("🐎 MARU KRA")
         st.success("API URL 19개는 원본 ZIP 값 자동 적용")
-        if API_KEY:
-            st.success("공공데이터 API Key 자동 로드됨")
+        st.info(f"현재 한국시간: {now_kst().strftime('%Y-%m-%d %H:%M:%S')} KST")
+
+        current_key = get_api_key()
+        key_input = st.text_input(
+            "공공데이터 API Key",
+            value=current_key,
+            type="password",
+            placeholder="공공데이터 일반 인증키 입력"
+        )
+        if st.button("API Key 저장", use_container_width=True):
+            if key_input.strip():
+                st.session_state["api_key_saved"] = key_input.strip()
+                if save_local_settings({"api_key": key_input.strip(), "saved_at_kst": now_str()}):
+                    st.success("API Key 저장 완료")
+                    st.rerun()
+                else:
+                    st.warning("세션에는 저장됐지만 파일 저장은 실패했습니다.")
+            else:
+                st.warning("API Key를 입력해 주세요.")
+
+        if get_api_key():
+            st.success("공공데이터 API Key 사용 가능")
         else:
-            st.error("API Key가 Secrets에 없어 실시간 호출 불가")
-            st.caption("앱 화면에는 키 입력칸을 만들지 않았습니다. Streamlit Secrets에 한 번만 저장하세요.")
+            st.error("API Key 없음: 입력 후 [API Key 저장]을 눌러주세요.")
 
         target_date = st.text_input("분석 날짜", value=today_kst())
         meet = st.selectbox("경마장", ["서울","부산경남","제주"], index=0)
@@ -756,7 +803,7 @@ def render():
         st.markdown("""
 ### Streamlit Secrets 예시
 
-앱 화면에서는 키를 다시 입력하지 않습니다. Streamlit Cloud에서 한 번만 저장하세요.
+앱 화면에서 `공공데이터 API Key: ************` 형태로 입력/저장할 수 있습니다. Streamlit Secrets를 써도 자동으로 불러옵니다.
 
 ```toml
 [maru]
@@ -771,7 +818,7 @@ SHEET_ID = "구글시트_ID"
 SERVICE_ACCOUNT_JSON = "서비스계정_JSON_전체"
 ```
 
-현재 ZIP은 사용자가 올린 `MARU_KRA_NO_REINPUT_API_ENGINE(1).zip` 안의 API URL 19개를 유지해서 만든 실시간판입니다.
+현재 ZIP은 사용자가 올린 `MARU_KRA_NO_REINPUT_API_ENGINE(1).zip` 안의 API URL 19개를 유지했고, 시간 기준은 한국시간(KST)입니다.
 """)
 
 render()

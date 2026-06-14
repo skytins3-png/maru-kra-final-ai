@@ -1,27 +1,26 @@
-# MARU KRA NO REINPUT REALTIME 19API HUB
+# MARU KRA REALTIME 19API HUB - KEY SAVE + KST
 
-## 이번 수정 핵심
-- 사용자가 올린 `MARU_KRA_NO_REINPUT_API_ENGINE(1).zip`의 실제 19개 API URL을 유지했습니다.
-- 이전처럼 가짜/더미 URL로 바꾸지 않았습니다.
-- 앱 화면에서 API Key/18개 URL을 다시 입력하지 않습니다.
-- API Key는 Streamlit Secrets에서 자동 로드합니다.
-- 실시간 API 호출 → 분석 → 허브 저장/불러오기 흐름으로 구성했습니다.
-- API가 500/0건이어도 앱이 멈추지 않고 진단 화면에 표시합니다.
+## 이번 수정
+- 공공데이터 API Key 입력란 추가
+- 화면 표시: `공공데이터 API Key: ************`
+- `[API Key 저장]` 버튼 추가
+- 저장한 키를 앱 내부 `maru_kra_data/maru_kra_local_settings.json`에 저장
+- Streamlit Secrets에 키가 있으면 자동 불러오기
+- 모든 시간 표시를 한국시간(KST) 기준으로 표시
+- 원본 `MARU_KRA_NO_REINPUT_API_ENGINE(1).zip`의 19개 API URL 유지
+- 실시간 API 호출 / API 진단 / 허브 저장 불러오기 유지
 
 ## 업로드
 1. ZIP 압축 풀기
-2. GitHub 저장소에 app.py, requirements.txt, README.md 업로드해서 덮어쓰기
+2. GitHub 저장소에 `app.py`, `requirements.txt`, `README.md` 업로드해서 덮어쓰기
 3. Commit changes
 4. Streamlit Cloud Reboot
 
-## Secrets
-Streamlit Cloud → Manage app → Settings → Secrets:
+## 참고
+화면에서 키를 저장하면 같은 Streamlit 서버에서는 유지됩니다.
+Streamlit Cloud가 재배포/재시작되면 내부 파일 저장이 초기화될 수 있으니, 가장 안정적인 방식은 Secrets에도 함께 저장하는 것입니다.
+
+Secrets 예시:
 
 [maru]
 API_KEY = "공공데이터_일반인증키"
-
-선택 Google Sheet 허브:
-
-[google_sheets]
-SHEET_ID = "구글시트_ID"
-SERVICE_ACCOUNT_JSON = "서비스계정_JSON_전체"
