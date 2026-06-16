@@ -3,7 +3,7 @@
 MARU KRA Auto Hub Runner
 - Streamlit 접속이 없어도 GitHub Actions/cron에서 주기적으로 실행하는 자동 허브 분석기
 - 19개 API URL 내장, API ON/OFF 반영, API별 호출 주기(아침 1회/30분/5분) 적용
-- 매경기 추천, 결과 성공/실패, 마권종류별 3만원 분할 구매, 배당률/손익을 CSV 빅데이터로 누적
+- 매경기 추천, 결과 성공/실패, 삼쌍승 18장(3묶음×6순서) / 배당률/손익을 CSV 빅데이터로 누적
 - 자동구매/자동결제 없음: 분석/기록만 수행
 """
 from __future__ import annotations
@@ -192,6 +192,38 @@ def horse_numbers(data: Dict[str, pd.DataFrame]) -> List[int]:
                 except Exception: pass
     return sorted(nums) or list(range(1, 13))
 
+
+def make_groups(rank: List[int]) -> List[List[int]]:
+    base: List[int] = []
+    for n in rank:
+        try:
+            nn = int(n)
+            if 1 <= nn <= 20 and nn not in base:
+                base.append(nn)
+        except Exception:
+            continue
+    for n in range(1, 15):
+        if n not in base:
+            base.append(n)
+        if len(base) >= 9:
+            break
+    return [base[0:3], base[3:6], base[6:9]]
+
+
+def expand_18(groups: List[List[int]]) -> List[str]:
+    import itertools
+    out: List[str] = []
+    for g in groups[:3]:
+        if len(g) < 3:
+            continue
+        for p in itertools.permutations(g[:3], 3):
+            out.append("-".join(map(str, p)))
+    return out[:18]
+
+
+def groups_text(groups: List[List[int]]) -> str:
+    return " | ".join("-".join(map(str, g[:3])) for g in groups[:3])
+
 def recommend(data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     nums = horse_numbers(data)
     random.seed(int(now_kst().strftime('%Y%m%d%H')) + len(nums))
@@ -210,7 +242,11 @@ def recommend(data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     rank = sorted(scores, key=scores.get, reverse=True)
     while len(rank) < 4: rank.append(len(rank)+1)
     a,b,c,d = rank[:4]
-    return {"축마": a, "상대마": b, "보조마": c, "구멍마": d, "방어삼복승": f"{a}-{b}-{c}", "공격삼쌍승": f"{a}>{b}>{c}", "신뢰도": int(min(98, max(50, scores[a]))), "예상배당": round(random.uniform(3, 30), 1)}
+    groups = make_groups(rank)
+    tickets18 = expand_18(groups)
+    return {"축마": a, "상대마": b, "보조마": c, "구멍마": d, "방어삼복승": f"{a}-{b}-{c}", "공격삼쌍승": f"{a}>{b}>{c}",
+            "삼쌍승3묶음": groups_text(groups), "삼쌍승18조합": "; ".join(tickets18), "추천금액": 18000,
+            "신뢰도": int(min(98, max(50, scores[a]))), "예상배당": round(random.uniform(3, 30), 1)}
 
 def stable_plan(result: Dict[str, Any], preset: str) -> pd.DataFrame:
     a,b,c = result["축마"], result["상대마"], result["보조마"]
@@ -264,6 +300,7 @@ def evaluate_and_save(rc_date: str, meet: str, race_no: int, result: Dict[str, A
             "전략명": preset, "추천마권": " / ".join(plan["마권종류"] + " " + plan["조합"].astype(str)),
             "축마": result["축마"], "상대마": result["상대마"], "보조마": result["보조마"], "구멍마": result["구멍마"],
             "방어삼복승": result["방어삼복승"], "공격삼쌍승": result["공격삼쌍승"],
+            "삼쌍승3묶음": result.get("삼쌍승3묶음"), "삼쌍승18조합": result.get("삼쌍승18조합"),
             "예상배당": result["예상배당"], "신뢰도": result["신뢰도"],
             "총구매": total_bet, "총환급": total_return, "순손익": total_return - total_bet if result_nums else 0,
             "적중여부": int(any(hits)) if result_nums else 0, "결과마번": "-".join(map(str, result_nums)) if result_nums else "결과대기",

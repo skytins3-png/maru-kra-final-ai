@@ -7,6 +7,7 @@ MARU KRA FINAL ALL-IN-ONE APP - STABLE BET INTEGRATED
 - 실시간 분석, 허브 저장, API 진단, 시간표/빅데이터, 10초 수동구매 모드 포함
 - 추가 통합: 마권 승식 설명 + 3만원 안정 분할 + 예상 배당/환급/손익 계산
 - 자동구매/자동결제 없음: 공식 페이지 이동 + 사용자가 직접 입력/확정
+- 모바일 상단 3추천창 + 삼쌍승 18장(3묶음×6순서) / 18,000원 수동구매 대시보드
 """
 
 from __future__ import annotations
@@ -303,6 +304,23 @@ def css() -> None:
 .mobile-copy-box {background:linear-gradient(180deg,#ffd96d,#d39a24); color:#111; border-radius:18px; padding:13px 12px; font-weight:1000; text-align:center; font-size:1.1rem; margin:10px 0;}
 .mobile-safe-note {color:#cbd5e1; font-size:.92rem; font-weight:800; line-height:1.45; padding:9px 4px; text-align:center;}
 .mobile-footer-line {display:flex; justify-content:space-around; gap:6px; color:#f8d777; font-weight:1000; font-size:.92rem; border-top:1px solid rgba(213,168,60,.45); margin-top:12px; padding-top:12px;}
+
+.mobile-budget {background:linear-gradient(180deg,#241b08,#080808); border:2px solid #d5a83c; border-radius:22px; padding:12px; text-align:center; margin:10px 0;}
+.mobile-budget .title {font-weight:1000; color:#f8d777; font-size:1.0rem;}
+.mobile-budget .amount {font-weight:1000; color:#fff; font-size:2.1rem; line-height:1.0; margin-top:4px;}
+.mobile-three-cards {display:grid; grid-template-columns:1fr 1fr 1fr; gap:7px; margin:12px 0;}
+.mobile-reco-card {background:linear-gradient(180deg,#181818,#050505); border:2px solid #d5a83c; border-radius:18px; padding:10px 5px; text-align:center; box-shadow:0 0 15px rgba(213,168,60,.18);}
+.mobile-reco-card .card-title {font-size:.82rem; font-weight:1000; color:#f8d777;}
+.mobile-reco-card .card-combo {font-size:1.45rem; font-weight:1000; color:#fff; margin:5px 0; letter-spacing:1px;}
+.mobile-reco-card .card-sub {font-size:.78rem; font-weight:900; color:#cbd5e1;}
+.mobile-ticket-section {border:2px solid #d5a83c; border-radius:22px; padding:11px 9px; background:linear-gradient(180deg,#101010,#030303); margin:12px 0;}
+.mobile-ticket-title {font-weight:1000; font-size:1.1rem; color:#f8d777; text-align:center; margin-bottom:8px;}
+.mobile-ticket-grid {display:grid; grid-template-columns:1fr 1fr; gap:7px;}
+.mobile-ticket {background:#f8fafc; color:#111; border-radius:13px; padding:8px 7px; font-weight:1000; display:flex; justify-content:space-between; align-items:center; border:1px solid #e5e7eb;}
+.mobile-ticket .num {background:#111827; color:#fff; border-radius:50%; width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; font-size:.78rem; margin-right:4px;}
+.mobile-ticket .combo {font-size:1.05rem; letter-spacing:1px;}
+.mobile-ticket .won {font-size:.83rem; color:#b45309; white-space:nowrap;}
+.mobile-copy-area {background:#fff7d6; color:#111; border:2px dashed #d59a22; border-radius:16px; padding:10px; font-size:.92rem; font-weight:900; line-height:1.35; white-space:pre-wrap;}
 .stButton > button, .stLinkButton a {width:100%; border-radius:18px !important; min-height:58px !important; font-weight:900 !important; font-size:1.25rem !important;}
 [data-testid="stMetricValue"] {font-size:2rem !important; font-weight:1000 !important;}
 [data-testid="stExpander"] summary p {font-size:1.1rem !important; font-weight:900 !important;}
@@ -784,6 +802,9 @@ def score_and_recommend(horses: pd.DataFrame, env: Dict[str, Any], sim_count: in
     sub = nums[2]
     hole = nums[3] if len(nums) > 3 else sub
 
+    triple_groups = make_triple_groups_from_nums(nums)
+    triple_18 = expand_triple_18(triple_groups)
+
     # Monte Carlo-ish combo list based on score weights.
     weights = df["점수"].clip(lower=1).tolist()
     combos: List[Dict[str, Any]] = []
@@ -822,7 +843,8 @@ def score_and_recommend(horses: pd.DataFrame, env: Dict[str, Any], sim_count: in
         title = "균형형"
     result = {
         "축마": int(axis), "상대마": int(mate), "보조마": int(sub), "구멍마": int(hole),
-        "공격삼쌍승": exact, "방어삼복승": trio, "추천금액": reco_amount,
+        "공격삼쌍승": exact, "방어삼복승": trio, "추천금액": 18000,
+        "삼쌍승3묶음": groups_to_text(triple_groups), "삼쌍승18조합": "; ".join(triple_18),
         "판정": title, "예상배당": est_odds, "신뢰도": confidence,
         "근거": f"상위 점수 {axis}-{mate}-{sub}, 주로 {env.get('주로')}, 날씨 {env.get('날씨')} 반영",
     }
@@ -1395,17 +1417,90 @@ def mobile_ready_recommendations(limit: int = 20) -> pd.DataFrame:
             work = work.drop_duplicates(subset=key_cols, keep="first")
     return work.head(limit)
 
+
+def _horse_token(v: Any) -> str:
+    """마번 표시용 토큰. 10번처럼 두 자리도 그대로 보존."""
+    try:
+        txt = str(v).replace("→", "-").replace(">", "-").strip()
+        nums = re.findall(r"\d+", txt)
+        if nums:
+            return str(int(nums[0]))
+    except Exception:
+        pass
+    return "-"
+
+
+def _unique_horse_list(values: List[Any], max_no: int = 14) -> List[str]:
+    out: List[str] = []
+    for v in values:
+        for n in re.findall(r"\d+", str(v).replace("→", "-").replace(">", "-")):
+            try:
+                nn = str(int(n))
+                if 1 <= int(nn) <= 20 and nn not in out:
+                    out.append(nn)
+            except Exception:
+                continue
+    for n in range(1, max_no + 1):
+        nn = str(n)
+        if nn not in out:
+            out.append(nn)
+        if len(out) >= 9:
+            break
+    return out[:9]
+
+
+def make_triple_groups_from_nums(nums: List[Any]) -> List[List[str]]:
+    """AI 상위마를 3묶음으로 나눠 삼쌍승 후보 그룹 생성."""
+    base = _unique_horse_list(nums, 14)
+    return [base[0:3], base[3:6], base[6:9]]
+
+
+def expand_triple_18(groups: List[List[str]]) -> List[str]:
+    """3묶음 × 각 6순열 = 삼쌍승 18장."""
+    import itertools
+    tickets: List[str] = []
+    for g in groups[:3]:
+        clean = _unique_horse_list(g, 20)[:3]
+        if len(clean) < 3:
+            continue
+        for p in itertools.permutations(clean, 3):
+            tickets.append("-".join(map(str, p)))
+    return tickets[:18]
+
+
+def parse_groups_from_latest(latest: Dict[str, Any]) -> List[List[str]]:
+    """허브 저장값에서 3묶음 복원. 없으면 축/상대/보조/구멍 기반으로 보정."""
+    raw = str(latest.get("삼쌍승3묶음") or latest.get("삼쌍승추천3묶음") or latest.get("추천3묶음") or "").strip()
+    groups: List[List[str]] = []
+    if raw and raw.lower() not in ["nan", "none", "-"]:
+        chunks = re.split(r"[|/;]+", raw)
+        for ch in chunks:
+            nums = re.findall(r"\d+", ch)
+            if len(nums) >= 3:
+                groups.append([str(int(nums[0])), str(int(nums[1])), str(int(nums[2]))])
+    if len(groups) >= 3:
+        return groups[:3]
+    values = [
+        latest.get("축마"), latest.get("상대마"), latest.get("보조마"), latest.get("구멍마"),
+        latest.get("공격삼쌍승"), latest.get("방어삼복승"), latest.get("추천마권"), latest.get("추천마목록"), latest.get("상위마번")
+    ]
+    return make_triple_groups_from_nums(values)
+
+
+def groups_to_text(groups: List[List[str]]) -> str:
+    return " | ".join("-".join(g[:3]) for g in groups[:3])
+
 def render_mobile_quick_view() -> None:
-    """현장 모바일 전용 화면: 사용자가 올린 이미지처럼 복승+삼쌍승 10초 구매 화면만 표시."""
+    """모바일 전용: 18,000원 기준 삼쌍승 18장 수동구매 대시보드."""
     css()
     st.markdown(
         """
 <div class="mobile-shell">
   <div style="text-align:center; font-weight:1000; color:#f7d77c; font-size:1.25rem; padding:4px 0 8px 0;">
-    모바일 10초 구매 전용 화면
+    모바일 삼쌍승 18장 구매 대시보드
   </div>
   <div style="text-align:center; color:#ffffff; font-weight:900; font-size:.95rem; padding-bottom:8px;">
-    추천 조합 확인 → 공식 구매페이지 이동
+    강력추천 3묶음 → 각 6장 자동전개 → 공식 페이지 수동결제
   </div>
 </div>
 """,
@@ -1422,16 +1517,21 @@ def render_mobile_quick_view() -> None:
   <div class="mobile-alert">지금 표시할 추천 없음</div>
   <div class="mobile-main-combo">
     <div class="race">구매 가능 시간대 대기 중</div>
-    <div class="mobile-safe-note">추천 저장 후 {MOBILE_READY_WINDOW_MIN}분 이내 · 결과대기 상태일 때만 모바일에 표시됩니다.</div>
+    <div class="mobile-safe-note">아직 구매할 추천 조합이 없습니다.<br>PC/허브 분석 저장 후 모바일에 자동 표시됩니다.</div>
+    <div class="mobile-safe-note">추천 저장 후 {MOBILE_READY_WINDOW_MIN}분 이내 · 결과대기 상태일 때만 표시</div>
   </div>
-  <div class="mobile-copy-box">PC/자동허브가 매경기 분석을 저장하면<br>모바일에는 복승 + 삼쌍승 구매 화면만 나타납니다.</div>
-  <div class="mobile-footer-line"><span>추천만 표시</span><span>10초 확인</span><span>공식페이지 구매</span></div>
+  <div class="mobile-copy-box">추천 확인 · 공식 구매 페이지 열기 · 새로고침</div>
+  <div class="mobile-footer-line"><span>추천만 표시</span><span>18장 수동구매</span><span>직접 결제</span></div>
 </div>
 """,
             unsafe_allow_html=True,
         )
-        if st.button("🔄 새로고침", use_container_width=True):
-            st.rerun()
+        c0, c1 = st.columns(2)
+        with c0:
+            if st.button("🔄 추천 확인", use_container_width=True):
+                st.rerun()
+        with c1:
+            st.link_button("↗ 공식 구매 페이지", kra_buy_url("서울"), use_container_width=True)
         st.stop()
 
     latest = ready.iloc[0].to_dict()
@@ -1441,31 +1541,35 @@ def render_mobile_quick_view() -> None:
     confidence = latest.get("신뢰도", "-")
     odds = latest.get("예상배당", "-")
     risk = str(latest.get("위험도", "중간"))
-    axis = str(latest.get("축마", "-"))
-    mate = str(latest.get("상대마", "-"))
-    sub = str(latest.get("보조마", "-"))
-    hole = str(latest.get("구멍마", "-"))
 
-    win_combo = "-"
-    if axis != "-" and mate != "-":
-        win_combo = f"{axis}-{mate}"
-    tri_combo = str(latest.get("공격삼쌍승") or "-")
-    if tri_combo in ["", "nan", "None", "-"] and axis != "-" and mate != "-" and sub != "-":
-        tri_combo = f"{axis}-{mate}-{sub}"
-    tri_combo = tri_combo.replace("→", "-")
+    groups = parse_groups_from_latest(latest)
+    tickets = expand_triple_18(groups)
+    per_amount = 1000
+    total_amount = len(tickets) * per_amount
+    group_cards = []
+    for idx, g in enumerate(groups[:3], start=1):
+        group_cards.append(f"""
+    <div class="mobile-reco-card">
+      <div class="card-title">추천창 {idx}</div>
+      <div class="card-combo">{'-'.join(g[:3])}</div>
+      <div class="card-sub">6장 · 6,000원</div>
+    </div>
+""")
+    ticket_html = []
+    for i, combo in enumerate(tickets, start=1):
+        ticket_html.append(f"""<div class="mobile-ticket"><span><span class="num">{i}</span><span class="combo">{combo}</span></span><span class="won">1천원</span></div>""")
 
-    bok_amount = 10000
-    tri_amount = 1000
+    copy_text = f"{meet} {race_no}R 삼쌍승 18장 / 각 1,000원 / 총 {total_amount:,}원\n" + "\n".join([f"{i}. {c} / 1,000원" for i, c in enumerate(tickets, start=1)])
 
     st.markdown(f"""
 <div class="mobile-phone">
   <div class="mobile-topbar"><span>☰</span><span>MARU KRA 실시간 분석</span><span>🔔</span></div>
 
   <div class="mobile-glow-title">
-    <div class="small">🏆 지금 놓치면 아까운 추천 · {elapsed}분 전 저장</div>
+    <div class="small">🔥 강력추천 경기 · {elapsed}분 전 저장</div>
     <div class="race">{meet} {race_no}R</div>
-    <div class="combo-main">복승 {win_combo}</div>
-    <div class="combo-sub">삼쌍승 {tri_combo}</div>
+    <div class="combo-main">삼쌍승 18장</div>
+    <div class="combo-sub">3묶음 × 6순서 · 각 1,000원</div>
   </div>
 
   <div class="mobile-mini-grid">
@@ -1474,55 +1578,60 @@ def render_mobile_quick_view() -> None:
     <div class="mobile-mini"><b>위험도</b><span>{risk}</span></div>
   </div>
 
-  <div class="mobile-alert">🔔 지금 바로 확인</div>
+  <div class="mobile-budget">
+    <div class="title">총 구매 기준</div>
+    <div class="amount">{total_amount:,}원</div>
+    <div class="mobile-safe-note">삼쌍승 {len(tickets)}장 × 1,000원</div>
+  </div>
 
-  <div class="mobile-main-combo">
-    <div class="race">{meet} {race_no}경주</div>
-    <div class="mobile-purchase-block">
-      <div class="bettype">복승</div>
-      <div class="numbers">{win_combo}</div>
-      <div class="money">1만원</div>
+  <div class="mobile-three-cards">
+    {''.join(group_cards)}
+  </div>
+
+  <div class="mobile-alert">🔔 추천 번호 복사 후 수동 구매</div>
+
+  <div class="mobile-ticket-section">
+    <div class="mobile-ticket-title">삼쌍승 18장 구매표</div>
+    <div class="mobile-ticket-grid">
+      {''.join(ticket_html)}
     </div>
-    <div class="mobile-purchase-block secondary">
-      <div class="bettype">삼쌍승</div>
-      <div class="numbers">{tri_combo}</div>
-      <div class="money">1천원</div>
-    </div>
-    <div class="mobile-safe-note">추천 조합을 보고 공식 구매페이지에서 직접 입력</div>
   </div>
 
   <div class="mobile-form-preview">
     <div class="title">공식 페이지 입력값</div>
     <div class="mobile-form-row"><span>경마장</span><span>{meet}</span></div>
     <div class="mobile-form-row"><span>경주</span><span>{race_no}R</span></div>
-    <div class="mobile-form-row"><span>복승</span><span>{win_combo} / {bok_amount:,}원</span></div>
-    <div class="mobile-form-row"><span>삼쌍승</span><span>{tri_combo} / {tri_amount:,}원</span></div>
+    <div class="mobile-form-row"><span>승식</span><span>삼쌍승</span></div>
+    <div class="mobile-form-row"><span>금액</span><span>각 1,000원 / 총 {total_amount:,}원</span></div>
   </div>
 
-  <div class="mobile-copy-box">📋 추천 조합 복사<br>복승 {win_combo} / {bok_amount:,}원 · 삼쌍승 {tri_combo} / {tri_amount:,}원</div>
-  <div class="mobile-safe-note">보조마 {sub} · 구멍마 {hole}<br>결제 및 최종 확정은 공식 구매페이지에서 직접 진행</div>
-  <div class="mobile-footer-line"><span>추천만 표시</span><span>복승+삼쌍승</span><span>직접 구매</span></div>
+  <div class="mobile-safe-note">결제 및 최종 확정은 공식 구매페이지에서 직접 진행</div>
+  <div class="mobile-footer-line"><span>추천만 표시</span><span>삼쌍승 18장</span><span>직접 구매</span></div>
 </div>
 """, unsafe_allow_html=True)
 
-    st.link_button("↗ 공식 마권구매 열기", kra_buy_url(meet), type="primary", use_container_width=True)
+    st.session_state["mobile_copy_text"] = copy_text
+    st.code(copy_text, language="text")
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("📋 추천 조합 복사", use_container_width=True):
-            st.session_state["mobile_copy_text"] = f"{meet} {race_no}R / 복승 {win_combo} {bok_amount:,}원 / 삼쌍승 {tri_combo} {tri_amount:,}원"
+        st.download_button(
+            "📋 추천번호 텍스트 받기",
+            data=copy_text.encode("utf-8"),
+            file_name=f"MARU_{meet}_{race_no}R_삼쌍승18장.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
     with c2:
-        if st.button("👁 다음 추천 보기", use_container_width=True):
+        if st.button("🔄 추천 확인", use_container_width=True):
             st.rerun()
-
-    if st.session_state.get("mobile_copy_text"):
-        st.code(st.session_state["mobile_copy_text"], language="text")
+    st.link_button("↗ 공식 마권구매 열기", kra_buy_url(meet), type="primary", use_container_width=True)
 
     with st.expander("최근 구매 가능 추천 더 보기", expanded=False):
-        show_cols = [c for c in ["저장시각", "경마장", "경주번호", "축마", "상대마", "보조마", "공격삼쌍승", "신뢰도", "예상배당", "추천경과분"] if c in ready.columns]
+        show_cols = [c for c in ["저장시각", "경마장", "경주번호", "삼쌍승3묶음", "삼쌍승18조합", "신뢰도", "예상배당", "추천경과분"] if c in ready.columns]
         st.dataframe(ready[show_cols] if show_cols else ready, use_container_width=True, height=240)
 
-    st.caption("※ 모바일 화면은 사진 이미지처럼 복승·삼쌍승 10초 구매 확인 전용입니다. PC 화면은 전체 분석/관리/통계용으로 그대로 유지됩니다.")
+    st.caption("※ 모바일은 삼쌍승 18장 수동구매 전용입니다. PC 화면은 전체 분석/관리/통계용으로 그대로 유지됩니다.")
     st.stop()
 
 
@@ -1738,6 +1847,7 @@ def render_live_panel(rc_date: str, meet: str, race_no: int, selected: List[str]
                 "저장시각": now_str(), "날짜": rc_date, "경마장": meet, "경주번호": int(race_no),
                 "축마": result.get("축마"), "상대마": result.get("상대마"), "보조마": result.get("보조마"), "구멍마": result.get("구멍마"),
                 "공격삼쌍승": result.get("공격삼쌍승"), "방어삼복승": result.get("방어삼복승"),
+                "삼쌍승3묶음": result.get("삼쌍승3묶음"), "삼쌍승18조합": result.get("삼쌍승18조합"),
                 "예상배당": result.get("예상배당"), "신뢰도": result.get("신뢰도"),
                 "추천금액": result.get("추천금액"), "근거": result.get("근거"), "실시간행수": live_rows,
             }
