@@ -36,3 +36,10 @@ https://내앱주소.streamlit.app
 
 실행:
 streamlit run app.py
+
+
+[모바일 자동 전환 수정]
+- 휴대폰(Android/iPhone)에서 접속하면 ?mode=mobile 이 없어도 자동으로 모바일 10초 구매 전용 화면이 열립니다.
+- PC에서 모바일 화면 테스트: https://앱주소.streamlit.app/?mode=mobile
+- 휴대폰에서 PC 전체 관리 화면 보기: https://앱주소.streamlit.app/?mode=pc
+- 모바일 전용 주소가 안 먹는 PWA/홈화면 환경에서도 User-Agent 자동감지로 모바일 화면을 우선 표시합니다.

@@ -1266,17 +1266,87 @@ def load_shared_recommendations(limit: int = 50) -> pd.DataFrame:
 MOBILE_READY_WINDOW_MIN = 20
 
 def _query_mode() -> str:
-    """URL에 ?mode=mobile 또는 ?view=mobile 이 붙으면 현장 모바일 보기로 전환합니다."""
+    """URL/컨텍스트에서 모바일 모드 값을 최대한 넓게 읽습니다.
+    - ?mode=mobile, ?view=mobile, ?mobile=1, ?m=1 모두 허용
+    - 일부 모바일/PWA 환경에서 st.query_params가 비어 보일 때 st.context.url도 재확인
+    """
+    values: List[str] = []
+    # 1) Streamlit 최신 query_params
     try:
         qp = st.query_params
-        return str(qp.get("mode") or qp.get("view") or "").lower().strip()
+        for k in ["mode", "view", "mobile", "m"]:
+            v = qp.get(k)
+            if isinstance(v, list):
+                values.extend([str(x) for x in v])
+            elif v is not None:
+                values.append(str(v))
     except Exception:
-        try:
-            qp = st.experimental_get_query_params()
-            val = (qp.get("mode") or qp.get("view") or [""])[0]
-            return str(val).lower().strip()
-        except Exception:
-            return ""
+        pass
+    # 2) Streamlit 구버전 query_params
+    try:
+        qp = st.experimental_get_query_params()
+        for k in ["mode", "view", "mobile", "m"]:
+            v = qp.get(k, [])
+            if isinstance(v, list):
+                values.extend([str(x) for x in v])
+            elif v is not None:
+                values.append(str(v))
+    except Exception:
+        pass
+    # 3) st.context.url 직접 파싱
+    try:
+        ctx = getattr(st, "context", None)
+        url = str(getattr(ctx, "url", "") or "")
+        if "?" in url:
+            q = dict(parse_qsl(urlparse(url).query, keep_blank_values=True))
+            for k in ["mode", "view", "mobile", "m"]:
+                if k in q:
+                    values.append(str(q.get(k, "")))
+    except Exception:
+        pass
+    joined = " ".join(values).lower().strip()
+    if joined in ["mobile", "m", "phone", "1", "true", "yes"]:
+        return "mobile"
+    if "mobile" in joined or "phone" in joined:
+        return "mobile"
+    return joined
+
+def _is_mobile_device() -> bool:
+    """휴대폰 접속이면 URL 파라미터가 없어도 모바일 구매 화면으로 보냅니다."""
+    try:
+        ctx = getattr(st, "context", None)
+        headers = getattr(ctx, "headers", {}) if ctx is not None else {}
+        ua = ""
+        if hasattr(headers, "get"):
+            ua = str(headers.get("user-agent", "") or headers.get("User-Agent", ""))
+        else:
+            ua = str(headers)
+        ua_l = ua.lower()
+        mobile_tokens = ["android", "iphone", "ipad", "ipod", "mobile", "samsungbrowser", "wv", "kakaotalk"]
+        return any(tok in ua_l for tok in mobile_tokens)
+    except Exception:
+        return False
+
+def _force_pc_mode() -> bool:
+    """휴대폰에서 PC 화면을 보고 싶을 때 ?mode=pc 또는 ?pc=1 사용."""
+    try:
+        qp = st.query_params
+        raw = str(qp.get("mode") or qp.get("view") or qp.get("pc") or "").lower()
+        return raw in ["pc", "desktop", "1", "true"] and ("pc" in raw or str(qp.get("pc", "")).lower() in ["1", "true"])
+    except Exception:
+        return False
+
+def _should_show_mobile() -> bool:
+    # ?mode=pc / ?pc=1 이면 모바일 자동감지를 끄고 PC 화면을 보여줍니다.
+    try:
+        qp = st.query_params
+        if str(qp.get("mode") or qp.get("view") or "").lower().strip() in ["pc", "desktop"]:
+            return False
+        if str(qp.get("pc") or "").lower().strip() in ["1", "true", "yes"]:
+            return False
+    except Exception:
+        pass
+    return _query_mode() in ["mobile", "m", "phone"] or _is_mobile_device()
 
 def _parse_kst_time(x: Any) -> Optional[datetime]:
     try:
@@ -1735,8 +1805,9 @@ def render_help_panel() -> None:
 
 def render() -> None:
     # PC 기본 화면은 기존 그대로 유지합니다.
-    # 모바일 현장 화면은 URL ?mode=mobile 로 접속하거나 사이드바에서 선택할 때만 분리 표시합니다.
-    if _query_mode() in ["mobile", "m", "phone"]:
+    # 휴대폰 접속은 URL 파라미터가 없어도 자동으로 모바일 10초 구매 화면으로 분리합니다.
+    # PC에서 강제로 모바일을 보려면 ?mode=mobile, 휴대폰에서 PC를 보려면 ?mode=pc 를 사용합니다.
+    if _should_show_mobile():
         render_mobile_quick_view()
         return
     css()
@@ -1756,6 +1827,7 @@ def render() -> None:
         st.success("전체 통합본 · 19개 API URL 자동내장")
         st.caption("PC 화면은 기존 전체 대시보드 유지")
         st.link_button("📱 모바일 10초 구매 전용 화면", "?mode=mobile", use_container_width=True)
+        st.link_button("🖥 휴대폰에서 PC 관리화면 보기", "?mode=pc", use_container_width=True)
         st.info("API URL 19개는 프로그램 안에 고정 탑재되어 있습니다. URL은 다시 입력하지 않아도 됩니다.")
         st.info(f"현재 한국시간: {now_kst().strftime('%Y-%m-%d %H:%M:%S')} KST")
         current_key = get_api_key()
