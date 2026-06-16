@@ -5,7 +5,7 @@ MARU KRA FINAL ALL-IN-ONE APP - STABLE BET INTEGRATED
 - 기존 핵심 기능 유지형: 19개 KRA/기상 API URL 자동 내장/고정, API별 ON/OFF, 전체 실시간 ON/OFF
 - HTTP 500/SSL 인증서 오류/무응답/0건이어도 앱 중단 없이 최근 캐시/샘플로 계속 분석
 - 실시간 분석, 허브 저장, API 진단, 시간표/빅데이터, 10초 수동구매 모드 포함
-- 추가 통합: 마권 승식 설명 + 3만원 안정 분할 + 예상 배당/환급/손익 계산
+- 추가 통합: 마권 승식 설명 + 18,000원 삼쌍승 18장 + 예상 배당/환급/손익 계산
 - 자동구매/자동결제 없음: 공식 페이지 이동 + 사용자가 직접 입력/확정
 - 모바일 상단 3추천창 + 삼쌍승 18장(3묶음×6순서) / 18,000원 수동구매 대시보드
 """
@@ -836,7 +836,7 @@ def score_and_recommend(horses: pd.DataFrame, env: Dict[str, Any], sim_count: in
         reco_amount = 10000
         title = "안전 방어 중심"
     elif risk_mode == "공격형":
-        reco_amount = 30000
+        reco_amount = 18000
         title = "고배당 소액도전 포함"
     else:
         reco_amount = 20000
@@ -912,7 +912,7 @@ def parse_exact_combo(exact: str, fallback: List[int]) -> List[int]:
     return nums[:4]
 
 
-def stable_plan_from_result(result: Dict[str, Any], budget: int = 30000, preset: str = "안정형") -> pd.DataFrame:
+def stable_plan_from_result(result: Dict[str, Any], budget: int = 18000, preset: str = "안정형") -> pd.DataFrame:
     axis = safe_int(result.get("축마", 7), 7)
     mate = safe_int(result.get("상대마", 3), 3)
     sub = safe_int(result.get("보조마", 10), 10)
@@ -979,7 +979,7 @@ def calc_case_rows(plan: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_stable_bet_module(result: Dict[str, Any], meet: str) -> None:
-    st.markdown("### 💰 3만원 안정 분할 & 예상 환급 계산")
+    st.markdown("### 💰 18,000원 삼쌍승 18장 / 예상 환급 계산")
     st.markdown(
         '<div class="betting-card"><div class="betting-title">핵심 원칙</div>'
         '한 방 몰빵보다 <b>연승·복연승으로 방어</b>하고, <b>복승·삼복승으로 수익</b>, '
@@ -1007,9 +1007,9 @@ def render_stable_bet_module(result: Dict[str, Any], meet: str) -> None:
     tmp_result = {**result, "축마": axis, "상대마": mate, "보조마": sub, "구멍마": hole}
     b1, b2 = st.columns([1, 1])
     with b1:
-        budget = st.number_input("총 구매 한도", min_value=1000, max_value=100000, value=30000, step=1000)
+        budget = st.number_input("총 구매 기준", min_value=1000, max_value=100000, value=18000, step=1000)
     with b2:
-        preset = st.selectbox("분할 방식", ["안정형", "보수형", "수익형"], index=0)
+        preset = st.selectbox("구매 전략", ["안정형", "보수형", "수익형"], index=0)
 
     plan = stable_plan_from_result(tmp_result, int(budget), preset)
     st.markdown("#### ✅ 기본 추천 조합")
@@ -1047,7 +1047,7 @@ def render_stable_bet_module(result: Dict[str, Any], meet: str) -> None:
         st.markdown(
             f"""
 <div class="manual-box">
-<div class="manual-title">3만원 안정 분할 예상</div>
+<div class="manual-title">18,000원 삼쌍승 18장 예상</div>
 <div class="manual-note">최소 방어: <b>{safe_int(p.get('축마만 3착 안', {}).get('환급금', 0)):,}원</b></div>
 <div class="manual-note">본전권: <b>{safe_int(p.get('축마+상대/보조마 3착 안', {}).get('환급금', 0)):,}원</b></div>
 <div class="manual-note">수익권: <b>{safe_int(p.get('축마+상대마 1·2착', {}).get('환급금', 0)):,}원</b></div>
@@ -1694,14 +1694,14 @@ def render_background_auto_hub_panel() -> None:
 - **아침 1회용**: 경주표, 출전마, 말정보, 장구, 레이팅, 기록, 출발심사, 심판.  
 - **30분용**: 체중, 기수변경, 코너/페이스, 기상특보.  
 - **5분용**: 배당, 당일배당, 인기, 단승/복승/삼복승 예측계열.  
-- **허브 저장**: 경주별 추천, 추천 승식, 3만원 분할 구매안, 예상배당, 실제결과, 성공/실패, 손익을 CSV로 누적합니다.  
+- **허브 저장**: 경주별 추천, 추천 승식, 18,000원 삼쌍승 18장 구매안, 예상배당, 실제결과, 성공/실패, 손익을 CSV로 누적합니다.  
 - **모바일/PC 확인**: 앱 접속 시 이미 쌓인 허브 추천과 전략별 수익 효율을 바로 불러옵니다.  
 """
     )
 
     log = load_auto_analysis_log()
     summary = calc_strategy_efficiency(log)
-    st.markdown("#### 3만원 분할 전략별 빅데이터")
+    st.markdown("#### 18,000원 삼쌍승 18장 전략별 빅데이터")
     if summary.empty:
         st.warning("아직 자동 검증 로그가 없습니다. GitHub Actions가 돌기 시작하면 전략별 적중률/손익/ROI가 여기에 쌓입니다.")
     else:
@@ -1891,6 +1891,58 @@ def render_api_hub_panel(status: pd.DataFrame, data: Dict[str, pd.DataFrame]) ->
             st.caption(f"{label}: {get_url(k)}")
 
 
+
+def render_triple18_dashboard_module(result: Dict[str, Any], meet: str) -> None:
+    """PC/관리 화면에서도 모바일과 같은 18,000원 삼쌍승 18장 구매표를 확인합니다."""
+    st.markdown("### 🎯 18,000원 기준 · 삼쌍승 18장 대시보드")
+    st.info("상단 추천창 3개를 만들고, 각 추천창의 3마리 조합을 6순서로 전개합니다. 총 18장 × 1,000원 = 18,000원입니다. 자동구매/자동결제는 없고 공식 페이지에서 직접 입력·확정합니다.")
+
+    groups = []
+    raw = result.get("삼쌍승3묶음", "")
+    if raw:
+        for part in str(raw).split("|"):
+            nums = re.findall(r"\d+", part)
+            if len(nums) >= 3:
+                groups.append([str(int(nums[0])), str(int(nums[1])), str(int(nums[2]))])
+    if len(groups) < 3:
+        values = [result.get("축마"), result.get("상대마"), result.get("보조마"), result.get("구멍마"), result.get("공격삼쌍승"), result.get("방어삼복승")]
+        groups = make_triple_groups_from_nums(values)
+    groups = groups[:3]
+    tickets = expand_triple_18(groups)
+    total_amount = len(tickets) * 1000
+
+    c1, c2, c3 = st.columns(3)
+    for i, (col, g) in enumerate(zip([c1, c2, c3], groups), start=1):
+        with col:
+            st.markdown(
+                f"""
+<div class="mobile-reco-card" style="margin-bottom:12px;">
+  <div class="card-title">추천창 {i}</div>
+  <div class="card-combo">{'-'.join(g[:3])}</div>
+  <div class="card-sub">6장 · 6,000원</div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
+    df = pd.DataFrame({
+        "번호": list(range(1, len(tickets)+1)),
+        "승식": ["삼쌍승"] * len(tickets),
+        "추천번호": tickets,
+        "구매금액": [1000] * len(tickets),
+    })
+    st.markdown("#### ✅ 삼쌍승 18장 구매표")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.metric("총 구매 기준", f"{total_amount:,}원")
+
+    copy_text = f"{meet} 삼쌍승 18장 / 각 1,000원 / 총 {total_amount:,}원\n" + "\n".join([f"{i}. {c} / 1,000원" for i, c in enumerate(tickets, start=1)])
+    st.markdown("#### 📋 복사용 추천번호")
+    st.code(copy_text, language="text")
+    st.download_button("추천번호 텍스트 받기", data=copy_text.encode("utf-8"), file_name="MARU_삼쌍승18장.txt", mime="text/plain", use_container_width=True)
+    st.link_button("↗ 공식 마권구매 페이지 열기", kra_buy_url(meet), type="primary", use_container_width=True)
+    st.caption("※ 추천번호를 복사/확인한 뒤 공식 구매 페이지에서 사용자가 직접 입력·결제합니다.")
+
+
 def render_help_panel() -> None:
     st.markdown("### 사용법 / 안전 안내")
     st.markdown(
@@ -1899,7 +1951,7 @@ def render_help_panel() -> None:
 2. 경마장, 날짜, 경주번호를 선택합니다.  
 3. 현장에서 HTTP 500이 나는 API는 **API ON/OFF**에서 꺼도 앱은 계속 작동합니다.  
 4. 추천 결과는 참고용입니다. 실제 구매는 공식 KRA 화면에서 직접 입력·확정합니다.  
-5. **3만원 안정 분할**은 손실을 줄이는 구조일 뿐 수익 보장이 아닙니다.
+5. **18,000원 삼쌍승 18장**은 손실을 줄이는 구조일 뿐 수익 보장이 아닙니다.
 
 **자동구매/자동결제 기능은 없습니다.** 이 앱은 분석, 기록, 허브 저장, 공식 페이지 이동만 제공합니다.
 
@@ -1988,7 +2040,7 @@ def render() -> None:
         selected = smart_selected_apis(collection_mode, selected)
         st.caption(f"이번 수집 대상: {len(selected)}/19개 · 모드: {collection_mode}")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏇 실시간 분석", "💰 3만원 분할/배당", "🔌 API/허브", "⏱ 스마트수집", "📘 도움말"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏇 실시간 분석", "🎯 삼쌍승18장/배당", "🔌 API/허브", "⏱ 스마트수집", "📘 도움말"])
     with tab1:
         score_df, result, combos, data, status, env = render_live_panel(rc_date, meet, int(race_no), selected, int(sim_count), risk_mode)
     with tab2:
@@ -2001,7 +2053,7 @@ def render() -> None:
         base2 = build_base_horses(data2, rc_date, meet, int(race_no))
         horses2 = merge_score_features(base2, data2, rc_date, meet, int(race_no))
         _, result2, _ = score_and_recommend(horses2, env2, int(sim_count), risk_mode)
-        render_stable_bet_module(result2, meet)
+        render_triple18_dashboard_module(result2, meet)
     with tab3:
         status2 = st.session_state.get("api_status", pd.DataFrame())
         data3 = st.session_state.get("live_data", {})
