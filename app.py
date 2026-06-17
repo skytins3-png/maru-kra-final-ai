@@ -1706,13 +1706,13 @@ def render_mobile_quick_view() -> None:
     total_amount = len(tickets) * per_amount
     group_cards = []
     for idx, g in enumerate(groups[:3], start=1):
-        group_cards.append(f"""
-    <div class="mobile-reco-card">
-      <div class="card-title">추천창 {idx} · {["안정형","변수형","고배당형"][idx-1]}</div>
-      <div class="card-combo">{'-'.join(g[:3])}</div>
-      <div class="card-sub">6장 · 6,000원</div>
-    </div>
-""")
+        # Streamlit markdown treats 4-space-indented HTML as a code block.
+        # Keep this HTML flush-left so it renders as real cards on mobile.
+        group_cards.append(f"""<div class="mobile-reco-card">
+<div class="card-title">추천창 {idx} · {["안정형","변수형","고배당형"][idx-1]}</div>
+<div class="card-combo">{'-'.join(g[:3])}</div>
+<div class="card-sub">6장 · 6,000원</div>
+</div>""")
     ticket_html = []
     for i, combo in enumerate(tickets, start=1):
         ticket_html.append(f"""<div class="mobile-ticket"><span><span class="num">{i}</span><span class="combo">{combo}</span></span><span class="won">1천원</span></div>""")
