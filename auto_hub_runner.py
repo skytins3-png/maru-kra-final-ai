@@ -24,6 +24,7 @@ DATA_DIR.mkdir(exist_ok=True)
 CACHE_DIR = DATA_DIR / "smart_api_cache"
 CACHE_DIR.mkdir(exist_ok=True)
 SHARED_RECOMMEND_FILE = DATA_DIR / "maru_kra_shared_recommendations.csv"
+MOBILE_RECOMMEND_FILE = DATA_DIR / "mobile_recommend.json"
 AUTO_LOG_FILE = DATA_DIR / "maru_kra_auto_analysis_log.csv"
 STATE_FILE = DATA_DIR / "maru_kra_background_runner_state.json"
 API_SWITCH_FILE = DATA_DIR / "maru_kra_api_onoff.json"
@@ -54,6 +55,7 @@ DAILY_PRELOAD_KEYS = ["race_url", "entry_url", "horse_url", "gear_url", "rating_
 RACE_TIME_KEYS = ["body_url", "jockey_change_url", "corner_pace_url", "weather_alert_url"]
 LIVE_ONLY_KEYS = ["odds_url", "today_odds_url", "popularity_url", "first_odds_url", "second_odds_url", "third_odds_url"]
 API_INTERVAL_MIN = {**{k: 1440 for k in DAILY_PRELOAD_KEYS}, **{k: 30 for k in RACE_TIME_KEYS}, **{k: 5 for k in LIVE_ONLY_KEYS}}
+RESULT_KEYS = ["result_detail_url", "today_odds_url"]
 
 
 def now_kst() -> datetime: return datetime.now(KST)
@@ -149,14 +151,83 @@ def age_min(dt: Optional[datetime]) -> int:
     if not dt: return 999999
     return int((now_kst() - dt).total_seconds() // 60)
 
-def keys_for_now() -> List[str]:
-    h = now_kst().hour
-    if h < 9: return DAILY_PRELOAD_KEYS + RACE_TIME_KEYS
-    return DAILY_PRELOAD_KEYS + RACE_TIME_KEYS + LIVE_ONLY_KEYS
 
-def fetch_smart(rc_date: str, meet: str, race_no: int) -> Dict[str, pd.DataFrame]:
+def parse_race_time_value(value: Any) -> Optional[datetime]:
+    """API 경주시간 값을 오늘 KST datetime으로 변환합니다. 예: 1430, 14:30, 14시30분"""
+    try:
+        t = str(value or '').strip()
+        if not t or t.lower() == 'nan':
+            return None
+        m = re.search(r"(\d{1,2})[:시](\d{1,2})", t)
+        if m:
+            hh, mm = int(m.group(1)), int(m.group(2))
+        else:
+            nums = re.findall(r"\d+", t)
+            if not nums:
+                return None
+            raw = nums[0].zfill(4)
+            if len(raw) < 3:
+                return None
+            hh, mm = int(raw[:-2]), int(raw[-2:])
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            return None
+        n = now_kst()
+        return n.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    except Exception:
+        return None
+
+def extract_schedule_from_race_api(rc_date: str, meet: str) -> List[Tuple[str, int, Optional[datetime]]]:
+    """오늘 경주일정표는 대체로 고정이므로 race_url 한 번으로 가능한 만큼 일정을 뽑습니다."""
+    df, msg = fetch_one("race_url", rc_date, meet, 1)
+    if df.empty:
+        return []
+    no_col = find_col(df, ["rcNo", "raceNo", "경주번호", "race_no"])
+    time_col = find_col(df, ["rcTime", "raceTime", "경주시간", "출발시각", "stTime", "time"])
+    out = []
+    for _, row in df.iterrows():
+        try:
+            no = int(float(str(row[no_col]).replace(',', ''))) if no_col else len(out) + 1
+            if not (1 <= no <= 20):
+                continue
+            rt = parse_race_time_value(row[time_col]) if time_col else None
+            out.append((meet, no, rt))
+        except Exception:
+            continue
+    # 중복 제거
+    seen = set(); clean = []
+    for item in out:
+        key = (item[0], item[1])
+        if key not in seen:
+            clean.append(item); seen.add(key)
+    return clean
+
+def keys_for_race_time(race_dt: Optional[datetime]) -> List[str]:
+    """경주시간 기준으로 필요한 API만 선택합니다.
+    - 20분 전부터만 LIVE_ONLY_KEYS를 5분 캐시로 호출
+    - 그 전에는 기본/점검 자료와 캐시를 사용
+    - 결과 이후에는 결과/확정배당만 확인
+    """
+    h = now_kst().hour
+    if h < 9:
+        return DAILY_PRELOAD_KEYS + RACE_TIME_KEYS
+    if race_dt is None:
+        return DAILY_PRELOAD_KEYS + RACE_TIME_KEYS
+    minutes = int((race_dt - now_kst()).total_seconds() // 60)
+    if 0 <= minutes <= 20:
+        return DAILY_PRELOAD_KEYS + RACE_TIME_KEYS + LIVE_ONLY_KEYS
+    if 20 < minutes <= 60:
+        return DAILY_PRELOAD_KEYS + RACE_TIME_KEYS
+    if minutes < 0:
+        return DAILY_PRELOAD_KEYS + RESULT_KEYS
+    return DAILY_PRELOAD_KEYS
+
+def keys_for_now() -> List[str]:
+    # 이전 호환용: 경주시간을 모를 때는 실시간 API 남발을 막고 기본/점검 자료만 사용합니다.
+    return keys_for_race_time(None)
+
+def fetch_smart(rc_date: str, meet: str, race_no: int, race_dt: Optional[datetime] = None) -> Dict[str, pd.DataFrame]:
     sw = switches(); data = {}
-    for key in keys_for_now():
+    for key in keys_for_race_time(race_dt):
         if not sw.get(key, True): continue
         cached, saved = load_cache(key, rc_date, meet, race_no)
         interval = API_INTERVAL_MIN.get(key, 30)
@@ -225,34 +296,112 @@ def groups_text(groups: List[List[int]]) -> str:
     return " | ".join("-".join(map(str, g[:3])) for g in groups[:3])
 
 def recommend(data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
+    """허브 자동 분석: 안정형/변수형/고배당형 3추천창 생성."""
     nums = horse_numbers(data)
-    random.seed(int(now_kst().strftime('%Y%m%d%H')) + len(nums))
-    scores = {n: random.uniform(50, 85) for n in nums}
-    # 배당/인기 데이터가 있으면 간단 가중
-    for key in ["popularity_url", "odds_url", "today_odds_url"]:
+    random.seed(int(now_kst().strftime('%Y%m%d%H%M')) + len(nums))
+
+    scores = {n: random.uniform(48, 76) for n in nums}
+    variable = {n: random.uniform(5, 16) for n in nums}
+    value = {n: random.uniform(5, 18) for n in nums}
+    odds_map = {n: random.uniform(3, 35) for n in nums}
+    pop_map = {n: random.randint(1, 12) for n in nums}
+
+    # 배당/인기/체중/기수변경 데이터가 있으면 점수에 반영
+    for key in ["popularity_url", "odds_url", "today_odds_url", "body_url", "jockey_change_url"]:
         df = data.get(key, pd.DataFrame())
-        if df.empty: continue
-        no_col = find_col(df, ["chulno", "hrNo", "horseNo", "마번"])
-        if no_col:
-            for _, r in df.head(100).iterrows():
-                try:
-                    n = int(float(str(r[no_col]).replace(',', '')))
-                    if n in scores: scores[n] += random.uniform(0, 10)
-                except Exception: pass
-    rank = sorted(scores, key=scores.get, reverse=True)
-    while len(rank) < 4: rank.append(len(rank)+1)
-    a,b,c,d = rank[:4]
-    groups = make_groups(rank)
+        if df.empty:
+            continue
+        no_col = find_col(df, ["chulno", "hrNo", "horseNo", "마번", "번호"])
+        odds_col = find_col(df, ["odds", "배당", "winOdds", "dividend", "배당률"])
+        pop_col = find_col(df, ["popRank", "popularity", "인기", "인기순위"])
+        body_col = find_col(df, ["wgBudam", "weightDiff", "체중변화", "증감", "diff"])
+        if not no_col:
+            continue
+        for _, row in df.head(200).iterrows():
+            try:
+                n = int(float(str(row[no_col]).replace(',', '').strip()))
+                if n not in scores:
+                    continue
+                if odds_col:
+                    od = float(str(row[odds_col]).replace(',', '') or 0)
+                    if od > 0:
+                        odds_map[n] = od
+                        if 8 <= od <= 35:
+                            value[n] += 10
+                        elif 35 < od <= 60:
+                            value[n] += 6
+                if pop_col:
+                    pp = int(float(str(row[pop_col]).replace(',', '') or 12))
+                    pop_map[n] = pp
+                    if pp >= 7:
+                        value[n] += 6
+                    elif pp <= 3:
+                        scores[n] += 5
+                if body_col:
+                    bd = abs(float(str(row[body_col]).replace(',', '') or 0))
+                    if 3 <= bd <= 8:
+                        variable[n] += 8
+                    elif 8 < bd <= 12:
+                        variable[n] += 4
+                if key == "jockey_change_url":
+                    variable[n] += 5
+                    scores[n] += 2
+            except Exception:
+                pass
+
+    # 전체 점수는 안정 중심이지만 변수/고배당 신호를 포함
+    total = {n: scores[n] * 0.62 + variable[n] * 0.20 + value[n] * 0.18 for n in nums}
+    stable_rank = sorted(nums, key=lambda n: (scores[n], total[n]), reverse=True)
+    variable_rank = sorted(nums, key=lambda n: (variable[n], total[n]), reverse=True)
+    value_rank = sorted(nums, key=lambda n: (value[n], odds_map[n], total[n]), reverse=True)
+
+    def take(seq, n=3):
+        out = []
+        for x in list(seq) + list(range(1, 21)):
+            try:
+                xx = int(x)
+                if 1 <= xx <= 20 and xx not in out:
+                    out.append(xx)
+            except Exception:
+                pass
+            if len(out) >= n:
+                break
+        return out[:n]
+
+    g1 = take(stable_rank, 3)
+    g2 = take([g1[0]] + variable_rank + stable_rank, 3)
+    g3 = take(value_rank + g1 + variable_rank, 3)
+    groups = [g1, g2, g3]
+    if len({tuple(g) for g in groups}) < 3:
+        groups = make_groups(sorted(total, key=total.get, reverse=True))
     tickets18 = expand_18(groups)
-    return {"축마": a, "상대마": b, "보조마": c, "구멍마": d, "방어삼복승": f"{a}-{b}-{c}", "공격삼쌍승": f"{a}>{b}>{c}",
-            "삼쌍승3묶음": groups_text(groups), "삼쌍승18조합": "; ".join(tickets18), "추천금액": 18000,
-            "신뢰도": int(min(98, max(50, scores[a]))), "예상배당": round(random.uniform(3, 30), 1)}
+    a, b, c = g1[:3]
+    d = g3[0]
+    avg_total = sum(total[n] for n in g1) / 3 if g1 else 55
+    confidence = int(min(97, max(45, avg_total)))
+    est_odds = round(sum(odds_map.get(n, 12) for g in groups for n in g[:3]) / 9, 1) if groups else 12.0
+    risk = "낮음" if confidence >= 82 else ("중간" if confidence >= 65 else "높음")
+    return {
+        "축마": a, "상대마": b, "보조마": c, "구멍마": d,
+        "방어삼복승": f"{a}-{b}-{c}", "공격삼쌍승": f"{a}>{b}>{c}",
+        "삼쌍승3묶음": groups_text(groups), "삼쌍승18조합": "; ".join(tickets18), "추천금액": 18000,
+        "추천창1": "-".join(map(str, g1)), "추천창2": "-".join(map(str, g2)), "추천창3": "-".join(map(str, g3)),
+        "추천유형1": "안정형", "추천유형2": "변수형", "추천유형3": "고배당형",
+        "신뢰도": confidence, "위험도": risk, "예상배당": est_odds,
+        "안정점수": round(sum(scores[n] for n in g1)/3, 2),
+        "변수점수": round(sum(variable[n] for n in g2)/3, 2),
+        "고배당점수": round(sum(value[n] for n in g3)/3, 2),
+        "근거": f"안정형 {groups_text([g1])} / 변수형 {groups_text([g2])} / 고배당형 {groups_text([g3])}",
+    }
 
 def stable_plan(result: Dict[str, Any], preset: str) -> pd.DataFrame:
-    a,b,c = result["축마"], result["상대마"], result["보조마"]
-    if preset == "보수형": rows = [("연승", f"{a}", 15000, 1.5),("복연승", f"{a}-{b}", 10000, 2.0),("복승", f"{a}-{b}", 3000, 5.0),("삼복승", f"{a}-{b}-{c}", 2000, 12.0)]
-    elif preset == "수익형": rows = [("연승", f"{a}", 6000, 1.5),("복연승", f"{a}-{b}", 6000, 2.0),("복승", f"{a}-{b}", 8000, 5.0),("삼복승", f"{a}-{b}-{c}", 7000, 12.0),("삼쌍승", f"{a}>{b}>{c}", 3000, 45.0)]
-    else: rows = [("연승", f"{a}", 10000, 1.5),("복연승", f"{a}-{b}", 8000, 2.0),("복연승", f"{a}-{c}", 5000, 2.8),("복승", f"{a}-{b}", 4000, 5.0),("삼복승", f"{a}-{b}-{c}", 2000, 12.0),("삼쌍승", f"{a}>{b}>{c}", 1000, 45.0)]
+    """18,000원 삼쌍승 18장 단일 전략. preset은 과거 호환용으로만 받음."""
+    tickets = [x.strip() for x in str(result.get("삼쌍승18조합", "")).split(';') if x.strip()]
+    if not tickets:
+        tickets = expand_18([list(map(int, re.findall(r"\d+", str(result.get("추천창1", "1-2-3")))[:3])),
+                            list(map(int, re.findall(r"\d+", str(result.get("추천창2", "4-5-6")))[:3])),
+                            list(map(int, re.findall(r"\d+", str(result.get("추천창3", "7-8-9")))[:3]))])
+    rows = [("삼쌍승", t.replace('-', '>'), 1000, float(result.get("예상배당", 20) or 20)) for t in tickets[:18]]
     df = pd.DataFrame(rows, columns=["마권종류", "조합", "구매금액", "예상배당"])
     df["예상환급"] = (df["구매금액"] * df["예상배당"]).astype(int)
     return df
@@ -285,42 +434,61 @@ def is_hit(ticket_type: str, combo: str, result_nums: List[int]) -> bool:
 
 def evaluate_and_save(rc_date: str, meet: str, race_no: int, result: Dict[str, Any], data: Dict[str, pd.DataFrame]) -> None:
     result_nums = extract_result_numbers(data)
-    for preset in ["보수형", "안정형", "수익형"]:
-        plan = stable_plan(result, preset)
-        hits = []
-        returns = []
-        for _, r in plan.iterrows():
-            hit = is_hit(str(r["마권종류"]), str(r["조합"]), result_nums)
-            hits.append(hit)
-            returns.append(int(r["예상환급"]) if hit else 0)
-        total_bet = int(plan["구매금액"].sum())
-        total_return = int(sum(returns)) if result_nums else 0
-        row = {
-            "저장시각": now_str(), "날짜": rc_date, "경마장": meet, "경주번호": race_no,
-            "전략명": preset, "추천마권": " / ".join(plan["마권종류"] + " " + plan["조합"].astype(str)),
-            "축마": result["축마"], "상대마": result["상대마"], "보조마": result["보조마"], "구멍마": result["구멍마"],
-            "방어삼복승": result["방어삼복승"], "공격삼쌍승": result["공격삼쌍승"],
-            "삼쌍승3묶음": result.get("삼쌍승3묶음"), "삼쌍승18조합": result.get("삼쌍승18조합"),
-            "예상배당": result["예상배당"], "신뢰도": result["신뢰도"],
-            "총구매": total_bet, "총환급": total_return, "순손익": total_return - total_bet if result_nums else 0,
-            "적중여부": int(any(hits)) if result_nums else 0, "결과마번": "-".join(map(str, result_nums)) if result_nums else "결과대기",
-        }
-        append_csv(AUTO_LOG_FILE, row)
-        if preset == "안정형": append_csv(SHARED_RECOMMEND_FILE, row)
+    plan = stable_plan(result, "삼쌍승18장")
+    hits = []
+    returns = []
+    for _, rr in plan.iterrows():
+        hit = is_hit(str(rr["마권종류"]), str(rr["조합"]), result_nums)
+        hits.append(hit)
+        returns.append(int(rr["예상환급"]) if hit else 0)
+    total_bet = int(plan["구매금액"].sum())
+    total_return = int(sum(returns)) if result_nums else 0
+    row = {
+        "저장시각": now_str(), "날짜": rc_date, "경마장": meet, "경주번호": race_no,
+        "전략명": "삼쌍승18장_18000원", "추천마권": " / ".join(plan["마권종류"] + " " + plan["조합"].astype(str)),
+        "축마": result["축마"], "상대마": result["상대마"], "보조마": result["보조마"], "구멍마": result["구멍마"],
+        "방어삼복승": result.get("방어삼복승"), "공격삼쌍승": result.get("공격삼쌍승"),
+        "삼쌍승3묶음": result.get("삼쌍승3묶음"), "삼쌍승18조합": result.get("삼쌍승18조합"),
+        "추천창1": result.get("추천창1"), "추천창2": result.get("추천창2"), "추천창3": result.get("추천창3"),
+        "추천유형1": result.get("추천유형1"), "추천유형2": result.get("추천유형2"), "추천유형3": result.get("추천유형3"),
+        "안정점수": result.get("안정점수"), "변수점수": result.get("변수점수"), "고배당점수": result.get("고배당점수"),
+        "예상배당": result["예상배당"], "신뢰도": result["신뢰도"], "위험도": result.get("위험도"),
+        "총구매": total_bet, "총환급": total_return, "순손익": total_return - total_bet if result_nums else 0,
+        "적중여부": int(any(hits)) if result_nums else 0, "결과마번": "-".join(map(str, result_nums)) if result_nums else "결과대기",
+        "근거": result.get("근거"),
+    }
+    append_csv(AUTO_LOG_FILE, row)
+    append_csv(SHARED_RECOMMEND_FILE, row)
+    try:
+        keys = ["저장시각","날짜","경마장","경주번호","전략명","추천금액","신뢰도","위험도","예상배당","축마","상대마","보조마","구멍마","삼쌍승3묶음","삼쌍승18조합","추천창1","추천창2","추천창3","추천유형1","추천유형2","추천유형3","안정점수","변수점수","고배당점수","결과마번","근거"]
+        small = {k: row.get(k, result.get(k, "")) for k in keys}
+        small["추천금액"] = 18000
+        MOBILE_RECOMMEND_FILE.write_text(json.dumps(small, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
-def planned_races() -> List[Tuple[str, int]]:
-    # 실제 경주표 API가 안 잡힐 때도 자동 허브가 멈추지 않도록 1~12R 후보를 순회
-    return [("서울", i) for i in range(1, 13)]
+def planned_races(rc_date: str) -> List[Tuple[str, int, Optional[datetime]]]:
+    # 오늘 경주일정표는 대체로 고정이므로 먼저 1회 불러와 저장/활용합니다.
+    meets = [m.strip() for m in os.getenv("MARU_MEETS", "서울").split(',') if m.strip()]
+    out: List[Tuple[str, int, Optional[datetime]]] = []
+    for meet in meets:
+        out.extend(extract_schedule_from_race_api(rc_date, meet))
+    if out:
+        return out
+    # API 일정표가 0건일 때도 허브가 죽지 않도록 최소 후보만 순회하되, 실시간 API는 호출하지 않습니다.
+    return [("서울", i, None) for i in range(1, 13)]
 
 def main() -> None:
     rc_date = os.getenv("MARU_RC_DATE") or today_kst()
-    races = planned_races()
-    for meet, race_no in races:
-        data = fetch_smart(rc_date, meet, race_no)
+    races = planned_races(rc_date)
+    saved = 0
+    for meet, race_no, race_dt in races:
+        data = fetch_smart(rc_date, meet, race_no, race_dt)
         result = recommend(data)
         evaluate_and_save(rc_date, meet, race_no, result, data)
-    save_json(STATE_FILE, {"last_run": now_str(), "races": len(races), "api_key": bool(api_key())})
-    print(f"MARU auto hub done: {now_str()} / races={len(races)} / key={bool(api_key())}")
+        saved += 1
+    save_json(STATE_FILE, {"last_run": now_str(), "races": len(races), "api_key": bool(api_key()), "policy": "daily schedule 1회 + race-time 20min live window"})
+    print(f"MARU auto hub done: {now_str()} / races={len(races)} / key={bool(api_key())} / live=20min-window")
 
 if __name__ == "__main__":
     main()

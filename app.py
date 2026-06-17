@@ -55,6 +55,7 @@ LIVE_CACHE_FILE = DATA_DIR / "maru_kra_last_live_cache.json"
 SMART_API_CACHE_DIR = DATA_DIR / "smart_api_cache"
 SMART_API_CACHE_DIR.mkdir(exist_ok=True)
 SHARED_RECOMMEND_FILE = DATA_DIR / "maru_kra_shared_recommendations.csv"
+MOBILE_RECOMMEND_FILE = DATA_DIR / "mobile_recommend.json"  # 모바일은 이 작은 JSON 1개만 우선 읽어서 버벅임 방지
 AUTO_ANALYSIS_LOG_FILE = DATA_DIR / "maru_kra_auto_analysis_log.csv"
 STRATEGY_BIGDATA_FILE = DATA_DIR / "maru_kra_strategy_bigdata.csv"
 BACKGROUND_RUN_STATE_FILE = DATA_DIR / "maru_kra_background_runner_state.json"
@@ -773,45 +774,109 @@ def fetch_weather(meet: str) -> Dict[str, Any]:
 
 
 def score_and_recommend(horses: pd.DataFrame, env: Dict[str, Any], sim_count: int, risk_mode: str) -> Tuple[pd.DataFrame, Dict[str, Any], List[Dict[str, Any]]]:
+    """안정형/변수형/고배당형 3추천창을 동시에 만드는 핵심 분석 엔진.
+
+    목적:
+    - 평소 성적 좋은 말만 뽑지 않음
+    - 기수변경, 체중변화, 거리/주로/경기장 변수, 인기 낮음+배당 높음 같은 구멍마 신호를 별도 점수화
+    - 모바일에는 3추천창 × 각 6순열 = 삼쌍승 18장, 18,000원 수동구매표로 전달
+    """
     df = horses.copy()
-    # Normalize and score; this is decision-support only, not guaranteed prediction.
     for c in ["레이팅", "최근순위", "승률", "복승률", "예상배당", "체중변화", "기수점수", "인기"]:
         df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0)
+
+    odds = df["예상배당"].replace(0, 12).clip(1, 120)
+    recent_bad = df["최근순위"].clip(1, 12)
+    popularity = df["인기"].replace(0, 12).clip(1, 20)
+    body_abs = df["체중변화"].abs().clip(0, 18)
+
+    # 1) 안정점수: 기본 능력, 최근 폼, 기수, 복승률 중심
     rating_score = df["레이팅"].clip(0, 120) / 120 * 25
-    recent_score = (10 - df["최근순위"].clip(1, 10)) / 9 * 20
+    recent_score = (12 - recent_bad) / 11 * 20
     win_score = df["승률"].clip(0, 50) / 50 * 15
     place_score = df["복승률"].clip(0, 80) / 80 * 15
     jockey_score = df["기수점수"].clip(0, 100) / 100 * 12
-    body_penalty = df["체중변화"].abs().clip(0, 10) * 0.8
-    popularity_bonus = (12 - df["인기"].clip(1, 12)) / 11 * 5
-    odds = df["예상배당"].replace(0, 12).clip(1, 80)
-    value_bonus = odds.apply(lambda x: 8 if 6 <= x <= 25 else (3 if 25 < x <= 50 else 0))
+    body_penalty = body_abs * 0.55
+    popularity_bonus = (20 - popularity) / 19 * 5
+
+    # 2) 변수점수: 평소 부진하지만 오늘 조건 변화로 급상승할 가능성
+    # - 체중 변화는 너무 크면 위험이지만 3~8kg 구간은 컨디션 변화 신호로 가산
+    body_signal = body_abs.apply(lambda x: 9 if 3 <= x <= 8 else (5 if 8 < x <= 12 else (2 if 1 <= x < 3 else 0)))
+    jockey_change_signal = df["기수점수"].apply(lambda x: 8 if x >= 70 else (4 if x >= 50 else 0))
+    poor_recent_rebound = recent_bad.apply(lambda x: 7 if x >= 7 else (3 if x >= 5 else 0))
+    track_signal = 3 if env.get("주로") in ["불량/습", "건조"] else 1
+    weather_signal = 2 if env.get("날씨") in ["비", "강풍"] else 0
+    df["변수점수"] = (body_signal + jockey_change_signal + poor_recent_rebound + track_signal + weather_signal).round(2)
+
+    # 3) 배당가치점수: 인기 낮고 배당 높으나 너무 황당하지 않은 구간을 포착
+    odds_value = odds.apply(lambda x: 12 if 8 <= x <= 35 else (7 if 35 < x <= 60 else (4 if 5 <= x < 8 else 0)))
+    low_pop_signal = popularity.apply(lambda x: 8 if x >= 7 else (4 if x >= 5 else 0))
+    df["고배당점수"] = (odds_value + low_pop_signal + df["변수점수"] * 0.8).round(2)
+
     env_adj = 0
     if env.get("주로") in ["불량/습", "건조"]:
-        env_adj = random.uniform(-1.5, 1.5)
-    df["점수"] = (rating_score + recent_score + win_score + place_score + jockey_score + popularity_bonus + value_bonus - body_penalty + env_adj).round(2)
-    df["위험"] = (df["체중변화"].abs() * 2 + df["최근순위"].clip(1, 10) + df["인기"].clip(1, 12) / 2).round(1)
-    df["근거"] = df.apply(lambda r: f"레이팅 {int(r['레이팅'])} · 최근 {int(r['최근순위'])}위권 · 체중 {int(r['체중변화']):+d}kg · 인기 {int(r['인기'])}", axis=1)
-    df = df.sort_values(["점수", "예상배당"], ascending=[False, False]).reset_index(drop=True)
+        env_adj = random.uniform(-1.0, 1.0)
 
-    nums = df["마번"].astype(int).tolist()
-    if len(nums) < 3:
-        nums = nums + [n for n in range(1, 13) if n not in nums][:3-len(nums)]
-    axis = nums[0]
-    mate = nums[1]
-    sub = nums[2]
-    hole = nums[3] if len(nums) > 3 else sub
+    df["안정점수"] = (rating_score + recent_score + win_score + place_score + jockey_score + popularity_bonus - body_penalty + env_adj).round(2)
+    df["점수"] = (df["안정점수"] * 0.62 + df["변수점수"] * 0.20 + df["고배당점수"] * 0.18).round(2)
+    df["위험"] = (body_abs * 1.5 + recent_bad + popularity / 2 + (odds.clip(1, 80) / 12)).round(1)
 
-    triple_groups = make_triple_groups_from_nums(nums)
+    def role_row(r):
+        if r["고배당점수"] >= max(r["안정점수"] * 0.35, 16):
+            return "고배당 후보"
+        if r["변수점수"] >= 14:
+            return "변수마"
+        if r["안정점수"] >= 45:
+            return "안정마"
+        return "보조마"
+
+    df["추천역할"] = df.apply(role_row, axis=1)
+    df["근거"] = df.apply(
+        lambda r: f"{r['추천역할']} · 안정 {r['안정점수']:.1f} · 변수 {r['변수점수']:.1f} · 배당가치 {r['고배당점수']:.1f} · 최근 {int(r['최근순위'])}위권 · 체중 {int(r['체중변화']):+d}kg · 인기 {int(r['인기'])}",
+        axis=1,
+    )
+    df = df.sort_values(["점수", "안정점수", "고배당점수"], ascending=[False, False, False]).reset_index(drop=True)
+
+    # 안전 후보 / 변수 후보 / 고배당 후보를 분리해서 3추천창 구성
+    all_nums = df["마번"].astype(int).tolist()
+    stable_nums = df.sort_values(["안정점수", "점수"], ascending=[False, False])["마번"].astype(int).tolist()
+    variable_nums = df.sort_values(["변수점수", "점수"], ascending=[False, False])["마번"].astype(int).tolist()
+    value_nums = df.sort_values(["고배당점수", "예상배당", "점수"], ascending=[False, False, False])["마번"].astype(int).tolist()
+
+    def unique_take(seq, used=None, n=3):
+        used = set(used or [])
+        out = []
+        for x in seq + list(range(1, 21)):
+            try:
+                xx = int(x)
+                if 1 <= xx <= 20 and xx not in out and (len(out) == 0 or xx not in used):
+                    out.append(xx)
+            except Exception:
+                continue
+            if len(out) >= n:
+                break
+        return out[:n]
+
+    group1 = unique_take(stable_nums, n=3)  # 안정형: 축/상대/보조
+    # 변수형: 축마 1마리를 깔고, 변수마/상대마를 섞음
+    group2 = unique_take([group1[0]] + variable_nums + stable_nums, n=3)
+    # 고배당형: 구멍마를 앞쪽에 두되, 축/상대도 포함
+    group3 = unique_take(value_nums + group1 + variable_nums, n=3)
+    triple_groups = [[str(x) for x in group1], [str(x) for x in group2], [str(x) for x in group3]]
+    # 세 그룹이 너무 겹치면 기존 상위 9마리로 보정
+    if len({tuple(g) for g in triple_groups}) < 3:
+        triple_groups = make_triple_groups_from_nums(all_nums)
     triple_18 = expand_triple_18(triple_groups)
 
+    axis = int(group1[0]); mate = int(group1[1]); sub = int(group1[2]); hole = int(group3[0])
+
     # Monte Carlo-ish combo list based on score weights.
-    weights = df["점수"].clip(lower=1).tolist()
+    nums = all_nums or list(range(1, 13))
+    weights = df["점수"].clip(lower=1).tolist() if not df.empty else [1] * len(nums)
     combos: List[Dict[str, Any]] = []
     rng_count = max(200, int(sim_count))
     for _ in range(rng_count):
         picked = random.choices(nums, weights=weights, k=min(3, len(nums)))
-        # enforce unique top3
         uniq = []
         for p in picked:
             if p not in uniq:
@@ -823,30 +888,34 @@ def score_and_recommend(horses: pd.DataFrame, env: Dict[str, Any], sim_count: in
                 uniq.append(p)
         c = uniq[:3]
         combos.append({"삼쌍승": f"{c[0]}→{c[1]}→{c[2]}", "삼복승": "-".join(map(str, sorted(c))), "축": c[0]})
+
     combo_df = pd.DataFrame(combos)
     top_exact = combo_df["삼쌍승"].value_counts().head(1)
     top_trio = combo_df["삼복승"].value_counts().head(1)
-    exact = str(top_exact.index[0]) if not top_exact.empty else f"{axis}→{mate}→{sub}"
-    trio = str(top_trio.index[0]) if not top_trio.empty else "-".join(map(str, sorted([axis, mate, sub])))
+    exact = str(top_exact.index[0]) if not top_exact.empty else "→".join(map(str, group1))
+    trio = str(top_trio.index[0]) if not top_trio.empty else "-".join(map(str, sorted(group1)))
 
     avg_score = float(df["점수"].head(3).mean()) if not df.empty else 0
-    confidence = min(97, max(45, int(avg_score)))
-    est_odds = max(2.0, round(float(df["예상배당"].head(3).mean()), 1))
-    if risk_mode == "안전형":
-        reco_amount = 10000
-        title = "안전 방어 중심"
-    elif risk_mode == "공격형":
-        reco_amount = 18000
-        title = "고배당 소액도전 포함"
-    else:
-        reco_amount = 20000
-        title = "균형형"
+    # 3추천창 신뢰도: 안정+변수+배당가치가 같이 높을수록 가산, 위험이 높으면 감산
+    risk_penalty = float(df["위험"].head(3).mean()) if not df.empty else 20
+    confidence = min(97, max(45, int(avg_score + df["변수점수"].head(3).mean() * 0.3 - risk_penalty * 0.15))) if not df.empty else 50
+    est_odds = max(2.0, round(float(df["예상배당"].head(3).replace(0, 12).mean()), 1)) if not df.empty else 12.0
+    risk_label = "낮음" if risk_penalty < 16 else ("중간" if risk_penalty < 28 else "높음")
+
     result = {
-        "축마": int(axis), "상대마": int(mate), "보조마": int(sub), "구멍마": int(hole),
+        "축마": axis, "상대마": mate, "보조마": sub, "구멍마": hole,
         "공격삼쌍승": exact, "방어삼복승": trio, "추천금액": 18000,
         "삼쌍승3묶음": groups_to_text(triple_groups), "삼쌍승18조합": "; ".join(triple_18),
-        "판정": title, "예상배당": est_odds, "신뢰도": confidence,
-        "근거": f"상위 점수 {axis}-{mate}-{sub}, 주로 {env.get('주로')}, 날씨 {env.get('날씨')} 반영",
+        "추천창1": "-".join(map(str, triple_groups[0])),
+        "추천창2": "-".join(map(str, triple_groups[1])),
+        "추천창3": "-".join(map(str, triple_groups[2])),
+        "추천유형1": "안정형", "추천유형2": "변수형", "추천유형3": "고배당형",
+        "판정": "18,000원 삼쌍승 18장 · 안정/변수/고배당 3추천창",
+        "예상배당": est_odds, "신뢰도": confidence, "위험도": risk_label,
+        "안정점수": round(float(df["안정점수"].head(3).mean()), 2) if not df.empty else 0,
+        "변수점수": round(float(df["변수점수"].head(3).mean()), 2) if not df.empty else 0,
+        "고배당점수": round(float(df["고배당점수"].head(3).mean()), 2) if not df.empty else 0,
+        "근거": f"추천창1 안정형 {groups_to_text([triple_groups[0]])} / 추천창2 변수형 {groups_to_text([triple_groups[1]])} / 추천창3 고배당형 {groups_to_text([triple_groups[2]])} · 주로 {env.get('주로')} · 날씨 {env.get('날씨')} 반영",
     }
     return df, result, combos
 
@@ -1150,6 +1219,51 @@ def cache_age_min(saved_at: Optional[datetime]) -> int:
     return max(0, int((now_kst() - saved_at).total_seconds() // 60))
 
 
+
+
+def parse_today_race_datetime(time_text: str) -> Optional[datetime]:
+    """사이드바/허브에서 받은 HH:MM 경주 예정시각을 오늘 KST datetime으로 변환합니다."""
+    try:
+        t = str(time_text or '').strip()
+        if not t:
+            return None
+        m = re.search(r"(\d{1,2})[:시](\d{1,2})", t)
+        if not m:
+            m = re.search(r"^(\d{3,4})$", t)
+            if not m:
+                return None
+            raw = m.group(1).zfill(4)
+            hh, mm = int(raw[:2]), int(raw[2:])
+        else:
+            hh, mm = int(m.group(1)), int(m.group(2))
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            return None
+        n = now_kst()
+        return n.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    except Exception:
+        return None
+
+
+def minutes_until_race(time_text: str) -> Optional[int]:
+    dt = parse_today_race_datetime(time_text)
+    if not dt:
+        return None
+    return int((dt - now_kst()).total_seconds() // 60)
+
+
+def live_window_state(time_text: str) -> str:
+    """경주 예정시각 기준 스마트 호출 상태를 반환합니다."""
+    m = minutes_until_race(time_text)
+    if m is None:
+        return "시간미입력"
+    if 0 <= m <= 20:
+        return "20분전_실시간"
+    if 20 < m <= 60:
+        return "60분전_점검"
+    if m < 0:
+        return "결과확인"
+    return "대기"
+
 def smart_selected_apis(mode: str, manual_selected: List[str]) -> List[str]:
     """19개를 매번 전부 치지 않고 상황별 필요한 API만 고릅니다."""
     if mode == "허브만 분석":
@@ -1164,11 +1278,24 @@ def smart_selected_apis(mode: str, manual_selected: List[str]) -> List[str]:
         return [k for k, _ in API_LABELS]
     if mode == "수동 ON/OFF":
         return manual_selected
-    # 스마트 자동: 낮에는 기본정보 캐시 + 실시간 핵심만, 이른 아침에는 사전수집 중심
+    # 스마트 자동: 19개를 매시간 전부 호출하지 않습니다.
+    # - 아침: 경주표/출전마/말정보 등 기본자료 1회 저장
+    # - 경주 60~20분 전: 체중/기수변경/주로/기상 등 점검자료
+    # - 경주 20분 전부터: 배당/인기/예측계열만 5분 주기로 집중 갱신
     h = now_kst().hour
     if h < 9:
         return DAILY_PRELOAD_KEYS + RACE_TIME_KEYS
-    return SMART_CORE_KEYS
+    race_time_text = st.session_state.get("race_time_text", "")
+    state = live_window_state(race_time_text)
+    st.session_state["smart_window_state"] = state
+    if state == "20분전_실시간":
+        return SMART_CORE_KEYS
+    if state == "60분전_점검":
+        return DAILY_PRELOAD_KEYS + RACE_TIME_KEYS
+    if state == "결과확인":
+        return DAILY_PRELOAD_KEYS + ["result_detail_url", "today_odds_url"]
+    # 경주시간을 모르면 기본/캐시 중심으로만 분석하고, 실시간 API 남발을 막습니다.
+    return DAILY_PRELOAD_KEYS
 
 
 def smart_default_refresh_seconds(mode: str) -> int:
@@ -1258,12 +1385,38 @@ def fetch_all_live(rc_date: str, meet: str, race_no: int, selected: List[str]) -
     return data, status
 
 
+def save_mobile_recommend_json(row: Dict[str, Any]) -> None:
+    """모바일 속도 개선: 큰 CSV 대신 최근 추천 1건을 작은 JSON으로 별도 저장."""
+    try:
+        compact_keys = [
+            "저장시각", "날짜", "경마장", "경주번호", "추천금액", "신뢰도", "위험도", "예상배당",
+            "축마", "상대마", "보조마", "구멍마", "삼쌍승3묶음", "삼쌍승18조합",
+            "추천창1", "추천창2", "추천창3", "추천유형1", "추천유형2", "추천유형3",
+            "안정점수", "변수점수", "고배당점수", "결과마번", "근거"
+        ]
+        small = {k: row.get(k, "") for k in compact_keys}
+        small.setdefault("추천금액", 18000)
+        small.setdefault("결과마번", "결과대기")
+        MOBILE_RECOMMEND_FILE.write_text(json.dumps(small, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+def load_mobile_recommend_json() -> Dict[str, Any]:
+    try:
+        if MOBILE_RECOMMEND_FILE.exists():
+            data = json.loads(MOBILE_RECOMMEND_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
 def save_shared_recommendation(row: Dict[str, Any]) -> bool:
     """모바일/PC가 같은 Streamlit 앱을 볼 때 같은 허브 파일에서 추천을 가져오게 저장합니다."""
     row = dict(row)
     row.setdefault("저장시각", now_str())
     ok1 = append_csv(SHARED_RECOMMEND_FILE, row)
     ok2 = save_hub_row(row)
+    save_mobile_recommend_json(row)
     return ok1 and ok2
 
 
@@ -1388,11 +1541,16 @@ def _parse_kst_time(x: Any) -> Optional[datetime]:
 
 def mobile_ready_recommendations(limit: int = 20) -> pd.DataFrame:
     """모바일에는 구매 가능한 짧은 시간대의 추천만 보여줍니다.
+    메모리 개선: 우선 mobile_recommend.json 1건만 읽고, 없을 때만 CSV 허브를 확인합니다.
     - 오늘 추천
     - 결과대기 상태
     - 저장 후 MOBILE_READY_WINDOW_MIN분 이내
     """
-    hub = load_shared_recommendations(300)
+    js = load_mobile_recommend_json()
+    if js:
+        hub = pd.DataFrame([js])
+    else:
+        hub = load_shared_recommendations(300)
     if hub.empty:
         return pd.DataFrame()
     work = hub.copy()
@@ -1550,7 +1708,7 @@ def render_mobile_quick_view() -> None:
     for idx, g in enumerate(groups[:3], start=1):
         group_cards.append(f"""
     <div class="mobile-reco-card">
-      <div class="card-title">추천창 {idx}</div>
+      <div class="card-title">추천창 {idx} · {["안정형","변수형","고배당형"][idx-1]}</div>
       <div class="card-combo">{'-'.join(g[:3])}</div>
       <div class="card-sub">6장 · 6,000원</div>
     </div>
@@ -1560,6 +1718,23 @@ def render_mobile_quick_view() -> None:
         ticket_html.append(f"""<div class="mobile-ticket"><span><span class="num">{i}</span><span class="combo">{combo}</span></span><span class="won">1천원</span></div>""")
 
     copy_text = f"{meet} {race_no}R 삼쌍승 18장 / 각 1,000원 / 총 {total_amount:,}원\n" + "\n".join([f"{i}. {c} / 1,000원" for i, c in enumerate(tickets, start=1)])
+
+    group_texts: List[str] = []
+    group_labels = ["10초 급함 · 1조합 안정형 6장", "30초 가능 · 2조합 변수형 6장", "60초 가능 · 3조합 고배당형 6장"]
+    for gi, g in enumerate(groups[:3], start=1):
+        group_tickets = expand_triple_18([g])[:6]
+        group_text = (
+            f"{meet} {race_no}R 삼쌍승 {gi}조합 6장 / 각 1,000원 / 총 6,000원\n"
+            + "\n".join([f"{i}. {c} / 1,000원" for i, c in enumerate(group_tickets, start=1)])
+        )
+        group_texts.append(group_text)
+
+    fast_mode_text = (
+        "빠른 구매 기준\n"
+        "10초 급함: 1조합 6장 = 6,000원\n"
+        "30초 가능: 1조합+2조합 12장 = 12,000원\n"
+        "60초 가능: 전체 18장 = 18,000원\n"
+    )
 
     st.markdown(f"""
 <div class="mobile-phone">
@@ -1588,7 +1763,7 @@ def render_mobile_quick_view() -> None:
     {''.join(group_cards)}
   </div>
 
-  <div class="mobile-alert">🔔 추천 번호 복사 후 수동 구매</div>
+  <div class="mobile-alert">🔔 시간별 빠른 구매: 10초 6장 · 30초 12장 · 60초 18장</div>
 
   <div class="mobile-ticket-section">
     <div class="mobile-ticket-title">삼쌍승 18장 구매표</div>
@@ -1611,12 +1786,26 @@ def render_mobile_quick_view() -> None:
 """, unsafe_allow_html=True)
 
     st.session_state["mobile_copy_text"] = copy_text
-    st.code(copy_text, language="text")
+
+    st.markdown("### ⚡ 빠른 구매 모드")
+    st.info("시간이 부족하면 1조합 6장만 먼저 보고, 여유가 있으면 2조합·전체 18장 순서로 확장하세요.")
+    st.code(fast_mode_text, language="text")
+
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("10초", "6장", "6,000원")
+    with m2:
+        st.metric("30초", "12장", "12,000원")
+    with m3:
+        st.metric("60초", "18장", "18,000원")
+
+    st.markdown("### 📋 바로 복사/붙여넣기용 추천번호")
+    st.text_area("전체 18장 복사용", value=copy_text, height=260, label_visibility="collapsed")
 
     c1, c2 = st.columns(2)
     with c1:
         st.download_button(
-            "📋 추천번호 텍스트 받기",
+            "📋 전체 18장 텍스트 받기",
             data=copy_text.encode("utf-8"),
             file_name=f"MARU_{meet}_{race_no}R_삼쌍승18장.txt",
             mime="text/plain",
@@ -1625,6 +1814,23 @@ def render_mobile_quick_view() -> None:
     with c2:
         if st.button("🔄 추천 확인", use_container_width=True):
             st.rerun()
+
+    st.markdown("### 🧩 조합별 빠른 복사")
+    tabs = st.tabs(["1조합 6장", "2조합 6장", "3조합 6장"])
+    for idx, tab in enumerate(tabs):
+        with tab:
+            group_text = group_texts[idx] if idx < len(group_texts) else "추천 조합 없음"
+            st.caption(group_labels[idx] if idx < len(group_labels) else f"{idx+1}조합 6장")
+            st.text_area(f"{idx+1}조합 복사용", value=group_text, height=150, label_visibility="collapsed")
+            st.download_button(
+                f"📋 {idx+1}조합 6장 텍스트 받기",
+                data=group_text.encode("utf-8"),
+                file_name=f"MARU_{meet}_{race_no}R_{idx+1}조합_삼쌍승6장.txt",
+                mime="text/plain",
+                use_container_width=True,
+                key=f"mobile_group_download_{idx+1}",
+            )
+
     st.link_button("↗ 공식 마권구매 열기", kra_buy_url(meet), type="primary", use_container_width=True)
 
     with st.expander("최근 구매 가능 추천 더 보기", expanded=False):
@@ -1685,7 +1891,7 @@ def render_background_auto_hub_panel() -> None:
     c1, c2, c3 = st.columns(3)
     c1.metric("아침 기본 데이터", "1회", "경주표·출전·말정보")
     c2.metric("경주 전 갱신", "30분", "체중·기수변경·주로")
-    c3.metric("직전 실시간", "5분", "배당·인기·기상")
+    c3.metric("20분 전 실시간", "5분", "배당·인기·예측")
 
     st.markdown("#### 자동 실행 구조")
     st.markdown(
@@ -1693,7 +1899,7 @@ def render_background_auto_hub_panel() -> None:
 - **API ON/OFF 유지**: 꺼둔 API는 자동 허브에서도 호출하지 않습니다.  
 - **아침 1회용**: 경주표, 출전마, 말정보, 장구, 레이팅, 기록, 출발심사, 심판.  
 - **30분용**: 체중, 기수변경, 코너/페이스, 기상특보.  
-- **5분용**: 배당, 당일배당, 인기, 단승/복승/삼복승 예측계열.  
+- **5분용**: 경주 예정시각 20분 전부터 배당, 당일배당, 인기, 단승/복승/삼복승 예측계열만 집중 갱신.  
 - **허브 저장**: 경주별 추천, 추천 승식, 18,000원 삼쌍승 18장 구매안, 예상배당, 실제결과, 성공/실패, 손익을 CSV로 누적합니다.  
 - **모바일/PC 확인**: 앱 접속 시 이미 쌓인 허브 추천과 전략별 수익 효율을 바로 불러옵니다.  
 """
@@ -1732,7 +1938,7 @@ def render_background_auto_hub_panel() -> None:
 
 def render_smart_collection_panel(rc_date: str, meet: str, race_no: int) -> None:
     st.markdown("### ⏱ 스마트 API 수집 / 허브 추천 시스템")
-    st.info("결론: 19개 API를 매번 전부 호출할 필요 없습니다. 아침에는 기본 데이터를 한 번 저장하고, 경주 직전에는 배당·인기·기상·체중·기수변경처럼 바뀌는 것만 갱신하면 됩니다.")
+    st.info("결론: 19개 API를 매번 전부 호출할 필요 없습니다. 아침에는 기본 데이터를 한 번 저장하고, 경주 예정시각 20분 전부터 배당·인기·예측계열처럼 진짜 바뀌는 것만 5분마다 갱신하면 됩니다.")
 
     render_background_auto_hub_panel()
 
@@ -2026,6 +2232,8 @@ def render() -> None:
         rc_date = st.text_input("분석 날짜", value=today_kst())
         meet = st.selectbox("경마장", ["서울", "부산경남", "제주"], index=0)
         race_no = st.number_input("경주번호", min_value=1, max_value=20, value=1, step=1)
+        race_time_text = st.text_input("경주 예정시각", value=st.session_state.get("race_time_text", ""), placeholder="예: 14:30")
+        st.session_state["race_time_text"] = race_time_text
         sim_count = st.slider("시뮬레이션", 300, 5000, 1200, step=100)
         risk_mode = st.selectbox("전략", ["균형형", "안전형", "공격형"], index=0)
         collection_mode = st.selectbox("API 수집 모드", ["스마트 자동", "아침 사전수집", "경주 전 1회수집", "실시간 집중", "허브만 분석", "수동 ON/OFF", "전체 19개"], index=0, help="19개 API를 매번 전부 부르지 않고, 시간대/상황별로 필요한 것만 호출합니다.")
@@ -2039,6 +2247,16 @@ def render() -> None:
         selected = [k for k, _ in API_LABELS if switches.get(k, False)]
         selected = smart_selected_apis(collection_mode, selected)
         st.caption(f"이번 수집 대상: {len(selected)}/19개 · 모드: {collection_mode}")
+        if collection_mode == "스마트 자동":
+            state = st.session_state.get("smart_window_state", live_window_state(st.session_state.get("race_time_text", "")))
+            if state == "20분전_실시간":
+                st.success("경주 20분 전 구간: 배당·인기·예측계열을 5분 주기로 집중 갱신합니다.")
+            elif state == "60분전_점검":
+                st.info("경주 60~20분 전 구간: 체중·기수변경·주로·기상 중심으로 갱신합니다.")
+            elif state == "시간미입력":
+                st.warning("경주 예정시각을 넣으면 20분 전부터 실시간 API만 자동 갱신합니다. 미입력 시 기본자료/캐시 중심으로 분석합니다.")
+            else:
+                st.caption(f"스마트 상태: {state}")
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏇 실시간 분석", "🎯 삼쌍승18장/배당", "🔌 API/허브", "⏱ 스마트수집", "📘 도움말"])
     with tab1:
