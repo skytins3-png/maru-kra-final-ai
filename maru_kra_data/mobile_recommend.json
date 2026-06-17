@@ -1,0 +1,8 @@
+{
+  "status": "waiting",
+  "message": "아직 모바일 추천 없음",
+  "racecourse": "서울",
+  "race_no": "1R",
+  "mobile_show": false,
+  "recommendations": []
+}
