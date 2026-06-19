@@ -1420,6 +1420,40 @@ def save_shared_recommendation(row: Dict[str, Any]) -> bool:
     return ok1 and ok2
 
 
+def run_mobile_hub_analysis(meet: str, race_no: int, race_time: str = "", sim_count: int = 1200, risk_mode: str = "균형형") -> Tuple[bool, Dict[str, Any], str]:
+    """PC가 꺼져 있어도 모바일에서 직접 분석→허브저장→추천 활성화를 수행합니다."""
+    try:
+        rc_date = today_kst()
+        meet = str(meet or "서울")
+        race_no = int(race_no or 1)
+        if race_time:
+            st.session_state["race_time_text"] = str(race_time).strip()
+        switches = get_api_switches()
+        manual_selected = [k for k, _ in API_LABELS if switches.get(k, False)]
+        selected = smart_selected_apis("스마트 자동", manual_selected)
+        data, status = fetch_all_live(rc_date, meet, int(race_no), selected)
+        env = fetch_weather(meet)
+        base = build_base_horses(data, rc_date, meet, int(race_no))
+        horses = merge_score_features(base, data, rc_date, meet, int(race_no))
+        score_df, result, combos = score_and_recommend(horses, env, int(sim_count), risk_mode)
+        live_rows = sum(len(v) for v in data.values()) if data else 0
+        row = {
+            "저장시각": now_str(), "날짜": rc_date, "경마장": meet, "경주번호": int(race_no),
+            "경주시간": str(race_time or st.session_state.get("race_time_text", "")),
+            "축마": result.get("축마"), "상대마": result.get("상대마"), "보조마": result.get("보조마"), "구멍마": result.get("구멍마"),
+            "공격삼쌍승": result.get("공격삼쌍승"), "방어삼복승": result.get("방어삼복승"),
+            "삼쌍승3묶음": result.get("삼쌍승3묶음"), "삼쌍승18조합": result.get("삼쌍승18조합"),
+            "예상배당": result.get("예상배당"), "신뢰도": result.get("신뢰도"), "위험도": result.get("위험도", "중간"),
+            "추천금액": result.get("추천금액", 18000), "근거": result.get("근거"), "실시간행수": live_rows,
+            "모바일생성": "Y", "분석모드": "모바일 허브분석 실행",
+            "API호출대상": len(selected), "API상태행수": 0 if status is None else len(status),
+        }
+        ok = save_shared_recommendation(row)
+        return bool(ok), row, f"모바일 허브분석 저장 완료 · API/캐시 {live_rows:,}행 반영"
+    except Exception as e:
+        return False, {}, f"모바일 허브분석 실패: {e}"
+
+
 def load_shared_recommendations(limit: int = 50) -> pd.DataFrame:
     frames = []
     for p in [SHARED_RECOMMEND_FILE, LOCAL_HUB_FILE, BIGDATA_FILE]:
@@ -1717,7 +1751,7 @@ def groups_to_text(groups: List[List[str]]) -> str:
     return " | ".join("-".join(g[:3]) for g in groups[:3])
 
 def render_mobile_quick_view() -> None:
-    """갤럭시 S26 Ultra 256GB 맞춤 모바일: 핵심 2화면만 표시."""
+    """갤럭시 S26 Ultra 256GB 맞춤 모바일: 분석 앱 → 10초 수동구매 모드 → 공식 구매페이지 이동 흐름."""
     css()
     st.caption("S26 Ultra 256GB 맞춤 · 자동구매/자동결제 없음 · 공식 페이지에서 직접 입력·확정")
 
@@ -1725,7 +1759,7 @@ def render_mobile_quick_view() -> None:
     if ready.empty:
         st.markdown(
             f"""
-<div class="mobile-phone" style="max-width:520px;">
+<div class="mobile-phone" style="max-width:560px;">
   <div class="mobile-topbar"><span>☰</span><span>MARU KRA 실시간 분석</span><span>🔔</span></div>
   <div class="mobile-alert">지금 표시할 추천 없음</div>
   <div class="mobile-main-combo">
@@ -1739,12 +1773,29 @@ def render_mobile_quick_view() -> None:
 """,
             unsafe_allow_html=True,
         )
-        c0, c1 = st.columns(2)
-        with c0:
+        st.markdown("### 📱 모바일에서 바로 추천 만들기")
+        mcol1, mcol2, mcol3 = st.columns([1.1, .8, 1])
+        with mcol1:
+            mobile_meet = st.selectbox("경마장", ["서울", "부산경남", "제주"], index=0, key="mobile_run_meet")
+        with mcol2:
+            mobile_race_no = st.number_input("경주", min_value=1, max_value=20, value=1, step=1, key="mobile_run_race_no")
+        with mcol3:
+            mobile_race_time = st.text_input("경주시간", value=st.session_state.get("race_time_text", ""), placeholder="예: 14:30", key="mobile_run_race_time")
+        st.caption("PC가 꺼져 있어도 Streamlit Cloud에서 API/캐시 분석 후 mobile_recommend.json을 저장합니다.")
+        r0, r1 = st.columns(2)
+        with r0:
+            if st.button("🔥 지금 허브분석 실행", type="primary", use_container_width=True):
+                with st.spinner("모바일에서 허브분석 실행 중..."):
+                    ok, row, msg = run_mobile_hub_analysis(mobile_meet, int(mobile_race_no), str(mobile_race_time))
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+        with r1:
             if st.button("🔄 추천 확인", use_container_width=True):
                 st.rerun()
-        with c1:
-            st.link_button("↗ 공식 구매 페이지", kra_buy_url("서울"), use_container_width=True)
+        st.link_button("↗ 공식 구매 페이지", kra_buy_url("서울"), use_container_width=True)
         st.stop()
 
     latest = ready.iloc[0].to_dict()
@@ -1758,13 +1809,20 @@ def render_mobile_quick_view() -> None:
     tickets = expand_triple_18(groups)
     total_amount = len(tickets) * 1000
     status_info = _mobile_status_payload(latest)
+    first_group = groups[0][:3] if groups else ["-", "-", "-"]
+    first_combo = "-".join(first_group)
+    first_tickets = expand_triple_18([first_group])[:6]
+    first_text = (
+        f"{meet} {race_no}R 삼쌍승 1조합 6장 / 각 1,000원 / 총 6,000원\n"
+        + "\n".join([f"{i}. {c} / 1,000원" for i, c in enumerate(first_tickets, start=1)])
+    )
 
-    # 모바일 1번 화면: 추천 요약 / 경주시간 / 추천저장 / 상태 / 3추천창
+    # 1번 화면: 분석 앱 요약 화면
     st.markdown(f"""
-<div class="mobile-phone" style="max-width:520px;">
+<div class="mobile-phone" style="max-width:560px;">
   <div class="mobile-topbar"><span>☰</span><span>MARU KRA 실시간 분석</span><span>🔔</span></div>
   <div class="mobile-glow-title">
-    <div class="small">🔥 강력추천 경기 · {elapsed}분 전 저장</div>
+    <div class="small">🏆 지금 놓치면 아까운 추천 · {elapsed}분 전 저장</div>
     <div class="race">{meet} {race_no}R</div>
     <div class="combo-main">삼쌍승 18장</div>
     <div class="combo-sub">3묶음 × 6순서 · 각 1,000원</div>
@@ -1772,24 +1830,24 @@ def render_mobile_quick_view() -> None:
 </div>
 """, unsafe_allow_html=True)
 
-    a1, a2, a3 = st.columns(3)
-    with a1:
+    m1, m2, m3 = st.columns(3)
+    with m1:
         st.metric("예상배당", f"{odds}배")
-    with a2:
+    with m2:
         st.metric("신뢰도", f"{confidence}")
-    with a3:
+    with m3:
         st.metric("위험도", risk)
 
-    b1, b2, b3 = st.columns(3)
-    with b1:
+    s1, s2, s3 = st.columns(3)
+    with s1:
         st.metric("경주시간", status_info["race_time_text"])
-    with b2:
+    with s2:
         st.metric("추천저장", status_info["saved_at_text"])
-    with b3:
+    with s3:
         st.metric("상태", status_info["status"])
 
     st.markdown(f"""
-<div class="mobile-budget" style="max-width:520px; margin-left:auto; margin-right:auto;">
+<div class="mobile-budget" style="max-width:560px; margin-left:auto; margin-right:auto;">
   <div class="title">총 구매 기준</div>
   <div class="amount">{total_amount:,}원</div>
   <div class="mobile-safe-note">삼쌍승 {len(tickets)}장 × 1,000원 · {status_info['detail']}</div>
@@ -1808,7 +1866,16 @@ def render_mobile_quick_view() -> None:
 </div>
 """, unsafe_allow_html=True)
 
-    st.markdown('<div class="mobile-alert" style="max-width:520px; margin-left:auto; margin-right:auto;">🔔 빠른 구매: 10초 6장 · 30초 12장 · 60초 18장</div>', unsafe_allow_html=True)
+    st.markdown(f"""
+<div style="max-width:560px; margin:12px auto 8px auto; display:grid; gap:10px;">
+  <div style="border:1.5px solid #d5a83c; border-radius:16px; padding:13px 14px; background:linear-gradient(180deg,#171717,#070707); color:#f8d777; font-weight:1000; display:flex; justify-content:space-between; align-items:center;">
+    <span>🍃 허브 저장</span><span>›</span>
+  </div>
+  <div style="border-radius:16px; padding:15px 14px; background:linear-gradient(180deg,#ffd96d,#d39a24); color:#111; font-size:1.15rem; font-weight:1000; display:flex; justify-content:space-between; align-items:center;">
+    <span>⏱ 10초 수동구매 모드</span><span>›</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     if status_info["result_text"] and status_info["result_text"] not in ["결과대기", "nan", "None"]:
         def _money_txt(v):
@@ -1820,11 +1887,24 @@ def render_mobile_quick_view() -> None:
     elif status_info["status"] == "결과대기":
         st.warning("경주가 시작되었거나 종료되었습니다. 결과가 들어오면 이 자리에서 적중/실패/손익을 보여줍니다.")
     elif status_info["status"] == "구매 가능":
-        st.info("지금은 구매 가능한 추천 화면입니다. 아래 2번 화면에서 조합 복사 후 공식 페이지에서 직접 입력하세요.")
+        st.info("지금은 구매 가능한 추천 화면입니다. 아래 10초 수동구매 모드에서 조합 복사 후 공식 페이지에서 직접 입력하세요.")
     else:
         st.info("아직 구매 대기 구간입니다. 추천은 유지되며 경주시간이 가까워지면 바로 확인하면 됩니다.")
 
-    # 모바일 2번 화면: 1조합 6장 / 2조합 6장 / 3조합 6장 빠른 복사
+    # 2번 화면: 10초 수동구매 모드 + 조합별 빠른 복사
+    st.markdown(f"""
+<div class="mobile-phone" style="max-width:560px; margin-top:18px;">
+  <div class="mobile-topbar"><span>‹</span><span>10초 수동구매 모드</span><span>🔒</span></div>
+  <div class="mobile-alert">🔔 지금 바로 확인</div>
+  <div class="mobile-glow-title">
+    <div class="race">{meet} {race_no}R</div>
+    <div class="combo-main" style="font-size:3.2rem;">{first_combo}</div>
+    <div class="combo-sub">1조합 6장 · 6,000원</div>
+  </div>
+  <div class="mobile-safe-note">추천 조합을 보고 공식 구매페이지에서 직접 입력</div>
+</div>
+""", unsafe_allow_html=True)
+
     group_texts: List[str] = []
     group_labels = ["1조합 6장", "2조합 6장", "3조합 6장"]
     for gi, g in enumerate(groups[:3], start=1):
@@ -1851,14 +1931,36 @@ def render_mobile_quick_view() -> None:
                 key=f"mobile_group_download_{idx+1}",
             )
 
+    st.markdown(f"""
+<div style="max-width:560px; margin:14px auto; background:#fff; color:#111; border-radius:22px; padding:18px; border:1px solid #e5e7eb;">
+  <div style="font-size:1.15rem; font-weight:1000; color:#0f3b76; margin-bottom:12px;">KRA 공식 마권구매 페이지 입력 안내</div>
+  <div style="display:grid; gap:9px; font-weight:900;">
+    <div>경마장: <b>{meet}</b></div>
+    <div>경주: <b>{race_no}R</b></div>
+    <div>마권종류: <b>삼쌍승</b></div>
+    <div>마번: <b>{first_combo}</b></div>
+    <div>구매금액: <b>각 1,000원</b></div>
+  </div>
+  <div style="margin-top:12px; color:#6b7280; font-weight:800; font-size:.9rem;">결제 및 최종 확정은 공식 구매페이지에서 직접 진행</div>
+</div>
+""", unsafe_allow_html=True)
+
     d1, d2 = st.columns(2)
     with d1:
+        if st.button("🔥 모바일 허브분석 재실행", type="primary", use_container_width=True):
+            with st.spinner("모바일에서 최신 추천 다시 만드는 중..."):
+                ok, row, msg = run_mobile_hub_analysis(meet, int(race_no), status_info.get("race_time_text", ""))
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+    with d2:
         if st.button("🔄 추천 확인", use_container_width=True):
             st.rerun()
-    with d2:
-        st.link_button("↗ 공식 마권구매 열기", kra_buy_url(meet), type="primary", use_container_width=True)
+    st.link_button("↗ 공식 마권구매 열기", kra_buy_url(meet), type="primary", use_container_width=True)
 
-    st.caption("※ S26 Ultra 256GB 화면에 맞춰 모바일은 핵심 2화면만 유지합니다. PC에서는 기존 전체 분석/관리/통계 기능을 그대로 유지합니다.")
+    st.caption("※ S26 Ultra 256GB 화면에 맞춰 분석 앱 → 10초 수동구매 모드 → 공식 구매페이지 이동 흐름으로 구성했습니다. 모바일에서 직접 허브분석 실행 가능, PC의 전체 분석/허브/API/빅데이터 기능은 그대로 유지됩니다.")
     st.stop()
 
 
