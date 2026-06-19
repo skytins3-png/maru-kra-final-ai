@@ -1584,6 +1584,18 @@ def _norm_race_no(v: Any) -> str:
     return txt.replace("R", "").replace("r", "").strip() or "-"
 
 
+def _safe_race_no(v: Any, default: int = 1) -> int:
+    """모바일 버튼에서 경주번호가 '5R', '-', 빈값이어도 앱이 죽지 않게 정수로 보정."""
+    try:
+        nums = re.findall(r"\d+", str(v or ""))
+        if nums:
+            n = int(nums[0])
+            return n if 1 <= n <= 20 else default
+    except Exception:
+        pass
+    return default
+
+
 def _race_time_text_from_row(row: Dict[str, Any]) -> str:
     for key in ["경주시간", "출발시간", "race_time_text"]:
         val = row.get(key, "")
@@ -1786,7 +1798,7 @@ def render_mobile_quick_view() -> None:
         with r0:
             if st.button("🔥 지금 허브분석 실행", type="primary", use_container_width=True):
                 with st.spinner("모바일에서 허브분석 실행 중..."):
-                    ok, row, msg = run_mobile_hub_analysis(mobile_meet, int(mobile_race_no), str(mobile_race_time))
+                    ok, row, msg = run_mobile_hub_analysis(mobile_meet, _safe_race_no(mobile_race_no), str(mobile_race_time))
                 if ok:
                     st.success(msg)
                     st.rerun()
@@ -1949,7 +1961,7 @@ def render_mobile_quick_view() -> None:
     with d1:
         if st.button("🔥 모바일 허브분석 재실행", type="primary", use_container_width=True):
             with st.spinner("모바일에서 최신 추천 다시 만드는 중..."):
-                ok, row, msg = run_mobile_hub_analysis(meet, int(race_no), status_info.get("race_time_text", ""))
+                ok, row, msg = run_mobile_hub_analysis(meet, _safe_race_no(race_no), status_info.get("race_time_text", ""))
             if ok:
                 st.success(msg)
                 st.rerun()
