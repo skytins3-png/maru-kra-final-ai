@@ -1,0 +1,39 @@
+name: MARU KRA Auto Hub Runner
+
+"on":
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  auto-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests urllib3 lxml
+
+      - name: Run MARU KRA auto hub
+        env:
+          PUBLIC_DATA_API_KEY: ${{ secrets.PUBLIC_DATA_API_KEY }}
+        run: python auto_hub_runner.py
+
+      - name: Commit hub data
+        run: |
+          git config user.name "maru-kra-auto-hub"
+          git config user.email "actions@github.com"
+          git add maru_kra_data/*.csv maru_kra_data/*.json maru_kra_data/smart_api_cache/*.json || true
+          git commit -m "Update MARU KRA auto hub data" || echo "No changes"
+          git push || true
