@@ -2,7 +2,7 @@
 """
 MARU KRA FINAL ALL-IN-ONE APP - STABLE BET INTEGRATED
 - 덮어쓰기용 단일 app.py
-- 기존 핵심 기능 유지형: 19개 KRA/기상 API URL 자동 내장/고정, API별 ON/OFF, 전체 실시간 ON/OFF
+- 기존 핵심 기능 유지형: 기존 19개 + 추가 7개 = 26개 KRA/기상 API URL 자동 내장/고정, API별 ON/OFF, 전체 실시간 ON/OFF
 - HTTP 500/SSL 인증서 오류/무응답/0건이어도 앱 중단 없이 최근 캐시/샘플로 계속 분석
 - 실시간 분석, 허브 저장, API 진단, 시간표/빅데이터, 10초 수동구매 모드 포함
 - 추가 통합: 마권 승식 설명 + 18,000원 삼쌍승 18장 + 예상 배당/환급/손익 계산
@@ -61,7 +61,7 @@ STRATEGY_BIGDATA_FILE = DATA_DIR / "maru_kra_strategy_bigdata.csv"
 BACKGROUND_RUN_STATE_FILE = DATA_DIR / "maru_kra_background_runner_state.json"
 
 # -----------------------------------------------------------------------------
-# 19 default API URLs
+# 26 default API URLs
 # -----------------------------------------------------------------------------
 FORCE_DEFAULT_URLS: Dict[str, str] = {
     "race_url": "https://apis.data.go.kr/B551015/API186_1/SeoulRace_1",
@@ -83,6 +83,14 @@ FORCE_DEFAULT_URLS: Dict[str, str] = {
     "first_odds_url": "https://apis.data.go.kr/B551015/API27_1/winPredictionRateInfo_1",
     "second_odds_url": "https://apis.data.go.kr/B551015/API29_1/doublePredictionRateInfo_1",
     "third_odds_url": "https://apis.data.go.kr/B551015/API30_1/triplePredictionRateInfo_1",
+    # 추가 7개 API: KRA 공식 흐름 기반 사전분석/직전보정/결과검증 보강
+    "race_overview_url": "https://apis.data.go.kr/B551015/API3_1/raceInfo_1",
+    "race_cancel_url": "https://apis.data.go.kr/B551015/API9_1/raceHorseCancelInfo_1",
+    "entry_registered_url": "https://apis.data.go.kr/B551015/API23_1/entryRaceHorse_1",
+    "dividend_integrated_url": "https://apis.data.go.kr/B551015/API160_1/integratedInfo_1",
+    "jockey_result_url": "https://apis.data.go.kr/B551015/API11_1/jockeyResult_1",
+    "race_detail_result_url": "https://apis.data.go.kr/B551015/API214_1/RaceDetailResult_1",
+    "horse_shoe_url": "https://apis.data.go.kr/B551015/API191_1/HorseShoe_1",
 }
 
 API_LABELS: List[Tuple[str, str]] = [
@@ -105,15 +113,25 @@ API_LABELS: List[Tuple[str, str]] = [
     ("first_odds_url", "⑰ 1착마 적중승식"),
     ("second_odds_url", "⑱ 2착마 적중승식"),
     ("third_odds_url", "⑲ 3착마 적중승식"),
+    ("race_overview_url", "⑳ 경주개요 API3_1"),
+    ("race_cancel_url", "㉑ 출전취소 API9_1"),
+    ("entry_registered_url", "㉒ 출전등록말 API23_1"),
+    ("dividend_integrated_url", "㉓ 확정배당통합 API160_1"),
+    ("jockey_result_url", "㉔ 기수성적 API11_1"),
+    ("race_detail_result_url", "㉕ 경주성적상세 API214_1"),
+    ("horse_shoe_url", "㉖ 경주마장제 API191_1"),
 ]
+API_TOTAL_COUNT = len(API_LABELS)
 
 
-API_URLS_LOCKED = True  # 19개 API URL은 프로그램 안에 자동 탑재되어 재입력하지 않습니다.
-APP_VERSION = "NO_REINPUT_19API_FULL_20260615"
+API_URLS_LOCKED = True  # 기존 19개 + 추가 7개 = 총 26개 API URL은 프로그램 안에 자동 탑재되어 재입력하지 않습니다.
+APP_VERSION = "FINAL_26API_MOBILE_LIGHT_HUB_PC_20260620"
 
 CORE_DEFAULT_API_KEYS = [
     "race_url", "entry_url", "body_url", "rating_url", "today_odds_url",
     "jockey_change_url", "corner_pace_url", "popularity_url",
+    "race_overview_url", "race_cancel_url", "entry_registered_url",
+    "dividend_integrated_url", "jockey_result_url", "race_detail_result_url", "horse_shoe_url",
 ]
 
 KRA_BUY_URLS = {
@@ -386,7 +404,7 @@ def render_api_onoff_panel() -> None:
         for k, label in API_LABELS:
             st.toggle(label, value=st.session_state.get(f"api_on_{k}", defaults.get(k, True)), key=f"api_on_{k}")
         switches = get_api_switches()
-        st.caption(f"현재 ON: {sum(1 for v in switches.values() if v)}/19개")
+        st.caption(f"현재 ON: {sum(1 for v in switches.values() if v)}/26개")
 
 # -----------------------------------------------------------------------------
 # API request/parsing
@@ -1139,13 +1157,16 @@ def render_stable_bet_module(result: Dict[str, Any], meet: str) -> None:
 DAILY_PRELOAD_KEYS = [
     "race_url", "entry_url", "horse_url", "gear_url", "rating_url",
     "race_record_url", "start_exam_url", "judge_url",
+    "race_overview_url", "entry_registered_url", "jockey_result_url", "horse_shoe_url",
 ]
 RACE_TIME_KEYS = [
     "body_url", "jockey_change_url", "corner_pace_url", "weather_alert_url",
+    "race_cancel_url",
 ]
 LIVE_ONLY_KEYS = [
     "odds_url", "today_odds_url", "popularity_url",
     "first_odds_url", "second_odds_url", "third_odds_url",
+    "dividend_integrated_url", "race_detail_result_url",
 ]
 SMART_CORE_KEYS = list(dict.fromkeys(DAILY_PRELOAD_KEYS + RACE_TIME_KEYS + LIVE_ONLY_KEYS))
 
@@ -1171,6 +1192,13 @@ API_SMART_INTERVAL_MIN = {
     "first_odds_url": 5,
     "second_odds_url": 5,
     "third_odds_url": 5,
+    "race_overview_url": 720,
+    "entry_registered_url": 720,
+    "jockey_result_url": 720,
+    "horse_shoe_url": 720,
+    "race_cancel_url": 10,
+    "dividend_integrated_url": 5,
+    "race_detail_result_url": 10,
 }
 
 API_SMART_GROUP = {
@@ -1265,7 +1293,7 @@ def live_window_state(time_text: str) -> str:
     return "대기"
 
 def smart_selected_apis(mode: str, manual_selected: List[str]) -> List[str]:
-    """19개를 매번 전부 치지 않고 상황별 필요한 API만 고릅니다."""
+    """26개를 매번 전부 치지 않고 상황별 필요한 API만 고릅니다."""
     if mode == "허브만 분석":
         return []
     if mode == "아침 사전수집":
@@ -1274,7 +1302,7 @@ def smart_selected_apis(mode: str, manual_selected: List[str]) -> List[str]:
         return SMART_CORE_KEYS
     if mode == "실시간 집중":
         return RACE_TIME_KEYS + LIVE_ONLY_KEYS
-    if mode == "전체 19개":
+    if mode == "전체 26개":
         return [k for k, _ in API_LABELS]
     if mode == "수동 ON/OFF":
         return manual_selected
@@ -1305,13 +1333,13 @@ def smart_default_refresh_seconds(mode: str) -> int:
         return 300
     if mode == "실시간 집중":
         return 60
-    if mode == "전체 19개":
+    if mode == "전체 26개":
         return 300
     return 120
 
 
 def fetch_all_live(rc_date: str, meet: str, race_no: int, selected: List[str]) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
-    """스마트 수집판: API별 캐시 주기를 적용해 매번 19개 전체 호출을 피합니다."""
+    """스마트 수집판: API별 캐시 주기를 적용해 매번 26개 전체 호출을 피합니다."""
     master_on = bool(st.session_state.get("api_master_on", True))
     collection_mode = st.session_state.get("collection_mode", "스마트 자동")
     switches = get_api_switches()
@@ -1339,8 +1367,8 @@ def fetch_all_live(rc_date: str, meet: str, race_no: int, selected: List[str]) -
 
         cached_df, saved_at, cache_msg = load_smart_api_cache(key, rc_date, meet, int(race_no))
         age = cache_age_min(saved_at)
-        # 전체 19개 모드가 아니면, 주기 안의 데이터는 재호출하지 않고 캐시 사용
-        if collection_mode != "전체 19개" and not cached_df.empty and age < interval:
+        # 전체 26개 모드가 아니면, 주기 안의 데이터는 재호출하지 않고 캐시 사용
+        if collection_mode != "전체 26개" and not cached_df.empty and age < interval:
             data[key] = cached_df
             status_rows.append({
                 "API": label, "key": key, "분류": group, "행수": int(len(cached_df)),
@@ -2073,7 +2101,7 @@ def render_background_auto_hub_panel() -> None:
 
 def render_smart_collection_panel(rc_date: str, meet: str, race_no: int) -> None:
     st.markdown("### ⏱ 스마트 API 수집 / 허브 추천 시스템")
-    st.info("결론: 19개 API를 매번 전부 호출할 필요 없습니다. 아침에는 기본 데이터를 한 번 저장하고, 경주 예정시각 20분 전부터 배당·인기·예측계열처럼 진짜 바뀌는 것만 5분마다 갱신하면 됩니다.")
+    st.info("결론: 26개 API를 매번 전부 호출할 필요 없습니다. 아침에는 기본 데이터를 한 번 저장하고, 경주 예정시각 20분 전부터 배당·인기·예측계열처럼 진짜 바뀌는 것만 5분마다 갱신하면 됩니다.")
 
     render_background_auto_hub_panel()
 
@@ -2081,7 +2109,7 @@ def render_smart_collection_panel(rc_date: str, meet: str, race_no: int) -> None
     manual_selected = [k for k, _ in API_LABELS if get_api_switches().get(k, False)]
     selected_now = smart_selected_apis(mode, manual_selected)
     st.markdown(f"#### 현재 수집 모드: **{mode}**")
-    st.caption(f"이번 모드 호출 대상: {len(selected_now)}/19개")
+    st.caption(f"이번 모드 호출 대상: {len(selected_now)}/26개")
 
     plan_rows = []
     for k, label in API_LABELS:
@@ -2228,7 +2256,7 @@ def render_api_hub_panel(status: pd.DataFrame, data: Dict[str, pd.DataFrame]) ->
             st.dataframe(local_hub_df[show_cols].tail(30) if show_cols else local_hub_df.tail(30), use_container_width=True, height=330)
         else:
             st.info("허브 저장 데이터가 아직 없습니다.")
-    with st.expander("API URL 19개 자동내장 확인용", expanded=False):
+    with st.expander("API URL 26개 자동내장 확인용", expanded=False):
         for k, label in API_LABELS:
             st.caption(f"{label}: {get_url(k)}")
 
@@ -2298,7 +2326,7 @@ def render_help_panel() -> None:
 **자동구매/자동결제 기능은 없습니다.** 이 앱은 분석, 기록, 허브 저장, 공식 페이지 이동만 제공합니다.
 
 ### 스마트 수집 원칙
-- 19개 API를 매번 전부 호출하지 않습니다.
+- 26개 API를 매번 전부 호출하지 않습니다.
 - 아침에는 경주표/출전마/말정보/레이팅 같은 기본 데이터를 1회 저장합니다.
 - 경주 직전에는 배당/인기/기상/체중/기수변경처럼 바뀌는 데이터만 갱신합니다.
 - 모바일/PC는 같은 Streamlit 앱의 허브 저장 자료를 불러와 추천을 확인합니다.
@@ -2319,7 +2347,7 @@ def render() -> None:
         """
 <div class="hero">
 <h2>MARU KRA 실전 대시보드</h2>
-<div class="muted">19개 API URL 자동내장 · 재입력 없음 · 스마트 자동수집 · API ON/OFF · 접속 없이 자동 허브 · PC 전체관리 / 모바일 10초 구매 분리</div>
+<div class="muted">26개 API URL 자동내장 · 재입력 없음 · 스마트 자동수집 · API ON/OFF · 접속 없이 자동 허브 · PC 전체관리 / 모바일 10초 구매 분리</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -2328,11 +2356,11 @@ def render() -> None:
 
     with st.sidebar:
         st.title("🐎 MARU KRA")
-        st.success("전체 통합본 · 19개 API URL 자동내장")
+        st.success("전체 통합본 · 기존 19개 + 추가 7개 = 26개 API URL 자동내장")
         st.caption("PC 화면은 기존 전체 대시보드 유지")
         st.link_button("📱 모바일 10초 구매 전용 화면", "?mode=mobile", use_container_width=True)
         st.link_button("🖥 휴대폰에서 PC 관리화면 보기", "?mode=pc", use_container_width=True)
-        st.info("API URL 19개는 프로그램 안에 고정 탑재되어 있습니다. URL은 다시 입력하지 않아도 됩니다.")
+        st.info("API URL 26개는 프로그램 안에 고정 탑재되어 있습니다. URL은 다시 입력하지 않아도 됩니다.")
         st.info(f"현재 한국시간: {now_kst().strftime('%Y-%m-%d %H:%M:%S')} KST")
         current_key = get_api_key()
         if current_key:
@@ -2372,7 +2400,7 @@ def render() -> None:
         st.session_state["race_time_text"] = race_time_text
         sim_count = st.slider("시뮬레이션", 300, 5000, 1200, step=100)
         risk_mode = st.selectbox("전략", ["균형형", "안전형", "공격형"], index=0)
-        collection_mode = st.selectbox("API 수집 모드", ["스마트 자동", "아침 사전수집", "경주 전 1회수집", "실시간 집중", "허브만 분석", "수동 ON/OFF", "전체 19개"], index=0, help="19개 API를 매번 전부 부르지 않고, 시간대/상황별로 필요한 것만 호출합니다.")
+        collection_mode = st.selectbox("API 수집 모드", ["스마트 자동", "아침 사전수집", "경주 전 1회수집", "실시간 집중", "허브만 분석", "수동 ON/OFF", "전체 26개"], index=0, help="26개 API를 매번 전부 부르지 않고, 시간대/상황별로 필요한 것만 호출합니다.")
         st.session_state["collection_mode"] = collection_mode
         default_refresh = smart_default_refresh_seconds(collection_mode)
         refresh_options = [0, 60, 120, 300, 600, 3600]
@@ -2382,7 +2410,7 @@ def render() -> None:
         switches = get_api_switches()
         selected = [k for k, _ in API_LABELS if switches.get(k, False)]
         selected = smart_selected_apis(collection_mode, selected)
-        st.caption(f"이번 수집 대상: {len(selected)}/19개 · 모드: {collection_mode}")
+        st.caption(f"이번 수집 대상: {len(selected)}/26개 · 모드: {collection_mode}")
         if collection_mode == "스마트 자동":
             state = st.session_state.get("smart_window_state", live_window_state(st.session_state.get("race_time_text", "")))
             if state == "20분전_실시간":
@@ -2411,7 +2439,7 @@ def render() -> None:
     with tab3:
         status2 = st.session_state.get("api_status", pd.DataFrame())
         data3 = st.session_state.get("live_data", {})
-        st.success("✅ API URL 19개 자동 탑재 완료: 재입력 없이 호출/ON-OFF만 사용")
+        st.success("✅ API URL 26개 자동 탑재 완료: 재입력 없이 호출/ON-OFF만 사용")
         render_api_hub_panel(status2, data3)
     with tab4:
         render_smart_collection_panel(rc_date, meet, int(race_no))
