@@ -49,6 +49,7 @@ LOCAL_HUB_FILE = DATA_DIR / "maru_kra_hub_records.csv"
 API_STATUS_FILE = DATA_DIR / "maru_kra_api_status.csv"
 LOCAL_SETTINGS_FILE = DATA_DIR / "maru_kra_local_settings.json"
 SCHEDULE_HUB_FILE = DATA_DIR / "maru_kra_schedule_hub.csv"
+RACE_SCHEDULE_FILE = DATA_DIR / "race_schedule.csv"  # KRA 경주시간표 허브: 실제 출발시간 매칭용
 BIGDATA_FILE = DATA_DIR / "maru_kra_bigdata_result_log.csv"
 AUTO_RUN_STATE_FILE = DATA_DIR / "maru_kra_auto_run_state.json"
 LIVE_CACHE_FILE = DATA_DIR / "maru_kra_last_live_cache.json"
@@ -1287,6 +1288,191 @@ def minutes_until_race(time_text: str) -> Optional[int]:
     return int((dt - now_kst()).total_seconds() // 60)
 
 
+
+
+def _clean_time_text(x: Any) -> str:
+    """KRA/CSV에서 온 출발시간 값을 HH:MM 형태로 정리합니다."""
+    try:
+        s = str(x or "").strip()
+        if not s or s.lower() in ["nan", "none", "null", "-"]:
+            return ""
+        # 2026-06-20 10:35:00 / 10:35:00 / 오전 10:35 처리
+        ampm = ""
+        if "오후" in s:
+            ampm = "PM"
+        elif "오전" in s:
+            ampm = "AM"
+        nums = re.findall(r"\d{1,2}", s)
+        if len(nums) >= 2:
+            hh, mm = int(nums[-2]), int(nums[-1])
+            # 날짜가 함께 있는 경우 마지막 두 개가 분/초일 수 있어 보정
+            m = re.search(r"(\d{1,2})[:시](\d{1,2})", s)
+            if m:
+                hh, mm = int(m.group(1)), int(m.group(2))
+            if ampm == "PM" and hh < 12:
+                hh += 12
+            if ampm == "AM" and hh == 12:
+                hh = 0
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                return f"{hh:02d}:{mm:02d}"
+        m = re.search(r"^(\d{3,4})$", s)
+        if m:
+            raw = m.group(1).zfill(4)
+            hh, mm = int(raw[:2]), int(raw[2:])
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                return f"{hh:02d}:{mm:02d}"
+    except Exception:
+        pass
+    return ""
+
+
+def _norm_meet_name(v: Any) -> str:
+    txt = str(v or "").strip()
+    txt = txt.replace("부산경남", "부경").replace("부산", "부경").replace("경남", "부경")
+    if "서울" in txt:
+        return "서울"
+    if "부경" in txt or "부산" in txt:
+        return "부경"
+    if "제주" in txt:
+        return "제주"
+    return txt
+
+
+def _candidate_cols(cols: List[str], keywords: List[str]) -> List[str]:
+    out = []
+    for c in cols:
+        cc = str(c).strip()
+        low = cc.lower()
+        for k in keywords:
+            if k.lower() in low or k in cc:
+                out.append(c)
+                break
+    return out
+
+
+def _lookup_race_time_in_df(df: pd.DataFrame, meet: Any, race_no: Any, rc_date: str = "") -> str:
+    """경주시간표/경주개요/캐시 DataFrame에서 실제 경주 출발시간을 찾습니다."""
+    try:
+        if df is None or df.empty:
+            return ""
+        d = df.copy()
+        d.columns = d.columns.astype(str).str.strip()
+        cols = list(d.columns)
+        meet_cols = _candidate_cols(cols, ["경마장", "racecourse", "meet", "시행경마장", "rcCourse"])
+        race_cols = _candidate_cols(cols, ["경주번호", "race_no", "raceno", "rcno", "경주", "race"])
+        time_cols = _candidate_cols(cols, ["출발시간", "출발시각", "경주시간", "race_time", "start", "time", "시각"])
+        date_cols = _candidate_cols(cols, ["날짜", "경주일자", "rc_date", "date", "일자"])
+        if not race_cols or not time_cols:
+            return ""
+        target_meet = _norm_meet_name(meet)
+        target_race = str(_safe_race_no(race_no))
+        sub = d
+        # 날짜 필터: 일치 데이터가 있을 때만 적용
+        if rc_date and date_cols:
+            dc = date_cols[0]
+            date_s = sub[dc].astype(str).str.replace("-", "", regex=False).str[:8]
+            same = sub[date_s == str(rc_date).replace("-", "")[:8]]
+            if not same.empty:
+                sub = same
+        # 경마장 필터: 일치 데이터가 있을 때만 적용
+        if target_meet and meet_cols:
+            mc = meet_cols[0]
+            same = sub[sub[mc].map(_norm_meet_name).astype(str) == target_meet]
+            if not same.empty:
+                sub = same
+        # 경주번호 필터
+        rc = race_cols[0]
+        sub = sub[sub[rc].map(_safe_race_no).astype(str) == target_race]
+        if sub.empty:
+            return ""
+        # 가능한 시간 컬럼에서 첫 유효값
+        for tc in time_cols:
+            for val in sub[tc].tolist():
+                t = _clean_time_text(val)
+                if t:
+                    return t
+    except Exception:
+        return ""
+    return ""
+
+
+def lookup_actual_race_time(meet: Any, race_no: Any, rc_date: str = "") -> str:
+    """허브 CSV + 현재 API 캐시에서 실제 경주시간을 찾아 모바일 상태에 반영합니다."""
+    rc_date = rc_date or today_kst()
+    sources: List[pd.DataFrame] = []
+    for path in [RACE_SCHEDULE_FILE, SCHEDULE_HUB_FILE, DATA_DIR / "race_schedule.csv"]:
+        try:
+            if path.exists():
+                sources.append(pd.read_csv(path, dtype=str, encoding="utf-8-sig"))
+        except Exception:
+            try:
+                sources.append(pd.read_csv(path, dtype=str))
+            except Exception:
+                pass
+    # 현재 화면에서 이미 가져온 API 데이터 우선 추가
+    try:
+        live_data = st.session_state.get("live_data", {})
+        if isinstance(live_data, dict):
+            for key in ["race_overview_url", "race_url", "entry_registered_url", "entry_url"]:
+                if key in live_data and isinstance(live_data[key], pd.DataFrame):
+                    sources.insert(0, live_data[key])
+    except Exception:
+        pass
+    for df in sources:
+        t = _lookup_race_time_in_df(df, meet, race_no, rc_date)
+        if t:
+            return t
+    return ""
+
+
+def next_available_race_from_schedule(meet: Any = "서울", rc_date: str = "") -> Dict[str, Any]:
+    """시간표 기준으로 아직 출발 전인 다음 경주를 찾아 반환합니다."""
+    rc_date = rc_date or today_kst()
+    frames = []
+    for path in [RACE_SCHEDULE_FILE, SCHEDULE_HUB_FILE, DATA_DIR / "race_schedule.csv"]:
+        try:
+            if path.exists():
+                frames.append(pd.read_csv(path, dtype=str, encoding="utf-8-sig"))
+        except Exception:
+            pass
+    if not frames:
+        return {}
+    now = now_kst()
+    target_meet = _norm_meet_name(meet)
+    candidates = []
+    for df in frames:
+        try:
+            d = df.copy()
+            d.columns = d.columns.astype(str).str.strip()
+            cols = list(d.columns)
+            race_cols = _candidate_cols(cols, ["경주번호", "race_no", "raceno", "rcno", "경주", "race"])
+            time_cols = _candidate_cols(cols, ["출발시간", "출발시각", "경주시간", "race_time", "start", "time", "시각"])
+            meet_cols = _candidate_cols(cols, ["경마장", "racecourse", "meet", "시행경마장"])
+            date_cols = _candidate_cols(cols, ["날짜", "경주일자", "date", "일자"])
+            if not race_cols or not time_cols:
+                continue
+            for _, r in d.iterrows():
+                if meet_cols and target_meet and _norm_meet_name(r.get(meet_cols[0], "")) != target_meet:
+                    continue
+                if date_cols:
+                    ds = str(r.get(date_cols[0], "")).replace("-", "")[:8]
+                    if ds and ds != rc_date:
+                        continue
+                t = _clean_time_text(r.get(time_cols[0], ""))
+                if not t:
+                    continue
+                dt = parse_today_race_datetime(t)
+                if dt and dt >= now:
+                    candidates.append({"경마장": target_meet or _norm_meet_name(r.get(meet_cols[0], "")) if meet_cols else str(meet), "경주번호": _safe_race_no(r.get(race_cols[0], 1)), "경주시간": t, "dt": dt})
+        except Exception:
+            continue
+    if not candidates:
+        return {}
+    candidates.sort(key=lambda x: x["dt"])
+    out = candidates[0]
+    out.pop("dt", None)
+    return out
+
 def live_window_state(time_text: str) -> str:
     """경주 예정시각 기준 스마트 호출 상태를 반환합니다."""
     m = minutes_until_race(time_text)
@@ -1450,6 +1636,11 @@ def save_shared_recommendation(row: Dict[str, Any]) -> bool:
     """모바일/PC가 같은 Streamlit 앱을 볼 때 같은 허브 파일에서 추천을 가져오게 저장합니다."""
     row = dict(row)
     row.setdefault("저장시각", now_str())
+    if not str(row.get("경주시간", row.get("출발시간", ""))).strip():
+        t = lookup_actual_race_time(row.get("경마장", "서울"), row.get("경주번호", 1), str(row.get("날짜", today_kst())).replace("-", "")[:8])
+        if t:
+            row["경주시간"] = t
+            row["출발시간"] = t
     ok1 = append_csv(SHARED_RECOMMEND_FILE, row)
     ok2 = save_hub_row(row)
     save_mobile_recommend_json(row)
@@ -1468,6 +1659,12 @@ def run_mobile_hub_analysis(meet: str, race_no: int, race_time: str = "", sim_co
         manual_selected = [k for k, _ in API_LABELS if switches.get(k, False)]
         selected = smart_selected_apis("스마트 자동", manual_selected)
         data, status = fetch_all_live(rc_date, meet, int(race_no), selected)
+        # 실제 KRA 경주시간표/경주개요와 매칭: 경주시간이 없으면 구매가능으로 잘못 표시하지 않게 보정
+        if not str(race_time or st.session_state.get("race_time_text", "")).strip():
+            matched_time = lookup_actual_race_time(meet, int(race_no), rc_date)
+            if matched_time:
+                race_time = matched_time
+                st.session_state["race_time_text"] = matched_time
         env = fetch_weather(meet)
         base = build_base_horses(data, rc_date, meet, int(race_no))
         horses = merge_score_features(base, data, rc_date, meet, int(race_no))
@@ -1642,6 +1839,9 @@ def _race_time_text_from_row(row: Dict[str, Any]) -> str:
 
 def _mobile_status_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     race_time_text = _race_time_text_from_row(row)
+    # 경주시간이 비어 있으면 허브 시간표/경주개요에서 실제 출발시간을 찾아 보정
+    if not race_time_text or race_time_text == "-":
+        race_time_text = lookup_actual_race_time(row.get("경마장", "서울"), row.get("경주번호", 1), str(row.get("날짜", today_kst())).replace("-", "")[:8])
     saved_at = _parse_kst_time(row.get("저장시각", ""))
     race_dt = parse_today_race_datetime(race_time_text) if race_time_text else None
     now = now_kst()
@@ -1655,8 +1855,8 @@ def _mobile_status_payload(row: Dict[str, Any]) -> Dict[str, Any]:
         status = "결과 확인"
         detail = f"실제결과 {result_text}"
     elif mins_to_race is None:
-        status = "구매 가능"
-        detail = "경주시간 미입력"
+        status = "시간확인필요"
+        detail = "경주시간표 미매칭"
     elif mins_to_race > 20:
         status = "대기"
         detail = f"출발 {mins_to_race}분 전"
@@ -2260,7 +2460,7 @@ def render_live_panel(rc_date: str, meet: str, race_no: int, selected: List[str]
         if st.button("현재 분석 허브 저장", type="primary"):
             row = {
                 "저장시각": now_str(), "날짜": rc_date, "경마장": meet, "경주번호": int(race_no),
-                "경주시간": st.session_state.get("race_time_text", ""),
+                "경주시간": st.session_state.get("race_time_text", "") or lookup_actual_race_time(meet, int(race_no), rc_date),
                 "축마": result.get("축마"), "상대마": result.get("상대마"), "보조마": result.get("보조마"), "구멍마": result.get("구멍마"),
                 "공격삼쌍승": result.get("공격삼쌍승"), "방어삼복승": result.get("방어삼복승"),
                 "삼쌍승3묶음": result.get("삼쌍승3묶음"), "삼쌍승18조합": result.get("삼쌍승18조합"),
