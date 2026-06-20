@@ -127,7 +127,7 @@ API_TOTAL_COUNT = len(API_LABELS)
 
 
 API_URLS_LOCKED = True  # 기존 19개 + 추가 7개 = 총 26개 API URL은 프로그램 안에 자동 탑재되어 재입력하지 않습니다.
-APP_VERSION = "FINAL_26API_MOBILE_LIGHT_HUB_PC_20260620"
+APP_VERSION = "FASTLOAD_HOTFIX_STRICT_CURRENT_RACE_26API_20260620"
 
 CORE_DEFAULT_API_KEYS = [
     "race_url", "entry_url", "body_url", "rating_url", "today_odds_url",
