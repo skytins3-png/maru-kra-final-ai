@@ -6,7 +6,7 @@ MARU KRA FINAL ALL-IN-ONE APP - STABLE BET INTEGRATED
 - HTTP 500/SSL 인증서 오류/무응답/0건이어도 앱 중단 없이 최근 캐시/샘플로 계속 분석
 - 실시간 분석, 허브 저장, API 진단, 시간표/빅데이터, 10초 수동구매 모드 포함
 - 추가 통합: 마권 승식 설명 + 18,000원 삼쌍승 18장 + 예상 배당/환급/손익 계산
-- 자동구매/자동결제 없음: 공식 페이지 이동 + 사용자가 직접 입력/확정
+- 자동구매/자동결제 없음: 더비온 등록완료 모드 + 공식 구매표 이동 + 사용자가 직접 입력/확정
 - 모바일 상단 3추천창 + 삼쌍승 18장(3묶음×6순서) / 18,000원 수동구매 대시보드
 """
 
@@ -134,10 +134,11 @@ CORE_DEFAULT_API_KEYS = [
     "dividend_integrated_url", "jockey_result_url", "race_detail_result_url", "horse_shoe_url",
 ]
 
+DERBYON_BUY_URL = "https://todayrace.kra.co.kr"
 KRA_BUY_URLS = {
-    "서울": "https://m.kra.co.kr",
-    "부산경남": "https://m.kra.co.kr",
-    "제주": "https://m.kra.co.kr",
+    "서울": DERBYON_BUY_URL,
+    "부산경남": DERBYON_BUY_URL,
+    "제주": DERBYON_BUY_URL,
 }
 
 # -----------------------------------------------------------------------------
@@ -242,7 +243,27 @@ def get_url(key: str) -> str:
 
 
 def kra_buy_url(meet: str = "서울") -> str:
-    return KRA_BUY_URLS.get(str(meet), "https://m.kra.co.kr")
+    # 더비온/오늘의경주 공식 구매표 진입 페이지.
+    # 외부 앱에서 마번/금액 자동 입력·자동구매는 하지 않고, 사용자가 직접 선택/확정합니다.
+    return KRA_BUY_URLS.get(str(meet), DERBYON_BUY_URL)
+
+
+def derbyon_registered_mode() -> bool:
+    """사용자가 더비온 온라인 회원 등록을 마친 경우 안내/버튼 문구를 구매표 중심으로 바꿉니다."""
+    return bool(st.session_state.get("derbyon_registered", True))
+
+
+def derbyon_notice_html(meet: str, race_no: Any, first_combo: str) -> str:
+    mode_text = "더비온 등록완료 모드" if derbyon_registered_mode() else "더비온 등록 필요"
+    status_text = "더비온 로그인 후 구매표에서 직접 입력·확정" if derbyon_registered_mode() else "더비온 본인인증/대면등록 후 이용"
+    return f"""
+<div style="max-width:560px; margin:14px auto; background:#eef6ff; color:#10233f; border-radius:18px; padding:14px 16px; border:1px solid #bfdbfe; font-weight:900;">
+  <div style="font-size:1.05rem; color:#0f3b76; font-weight:1000; margin-bottom:8px;">✅ {mode_text}</div>
+  <div>경마장 <b>{meet}</b> · 경주 <b>{race_no}R</b> · 삼쌍승 <b>{first_combo}</b></div>
+  <div style="margin-top:6px; color:#475569;">{status_text}</div>
+  <div style="margin-top:6px; color:#dc2626;">자동구매/자동결제 없음 · 바로구매는 공식 더비온에서 본인이 직접 누름</div>
+</div>
+"""
 
 
 def mask_key(text: str) -> str:
@@ -1155,8 +1176,8 @@ def render_stable_bet_module(result: Dict[str, Any], meet: str) -> None:
 
     st.info("배당 계산 공식: 환급금 = 구매금액 × 배당률. 환급금은 원금 포함 금액으로 보고, 순손익은 환급금 - 총 구매금액입니다.")
     st.warning("실제 배당은 경주 직전까지 변동됩니다. 이 계산은 현재 배당 기준 예상치이며, 수익을 보장하지 않습니다.")
-    st.link_button("↗ KRA 공식 마권구매 홈페이지 바로가기", kra_buy_url(meet), use_container_width=True)
-    st.caption("※ 자동구매/자동결제 아님 · 공식 페이지 이동만 제공 · 사용자가 직접 입력/확정")
+    st.link_button("↗ 더비온/KRA 공식 구매표 열기", kra_buy_url(meet), use_container_width=True)
+    st.caption("※ 자동구매/자동결제 아님 · 공식 구매표 이동만 제공 · 사용자가 직접 입력/확정")
 
 
 # -----------------------------------------------------------------------------
@@ -2096,9 +2117,9 @@ def groups_to_text(groups: List[List[str]]) -> str:
     return " | ".join("-".join(g[:3]) for g in groups[:3])
 
 def render_mobile_quick_view() -> None:
-    """갤럭시 S26 Ultra 256GB 맞춤 모바일: 분석 앱 → 10초 수동구매 모드 → 공식 구매페이지 이동 흐름."""
+    """갤럭시 S26 Ultra 256GB 맞춤 모바일: 분석 앱 → 10초 수동구매 모드 → 공식 구매표 이동 흐름."""
     css()
-    st.caption("S26 Ultra 256GB 맞춤 · 자동구매/자동결제 없음 · 공식 페이지에서 직접 입력·확정")
+    st.caption("S26 Ultra 256GB 맞춤 · 더비온 등록완료 모드 · 자동구매/자동결제 없음 · 공식 구매표에서 직접 입력·확정")
 
     ready = mobile_ready_recommendations(20)
     if ready.empty:
@@ -2143,7 +2164,7 @@ def render_mobile_quick_view() -> None:
         with r1:
             if st.button("🔄 추천 확인", use_container_width=True):
                 st.rerun()
-        st.link_button("↗ 공식 구매 페이지", kra_buy_url("서울"), use_container_width=True)
+        st.link_button("↗ 더비온 공식 구매표 열기", kra_buy_url("서울"), use_container_width=True)
         st.stop()
 
     latest = sync_row_to_current_race(ready.iloc[0].to_dict(), force_if_stale=True)
@@ -2236,7 +2257,7 @@ def render_mobile_quick_view() -> None:
     elif status_info["status"] == "결과대기":
         st.warning("경주가 시작되었거나 종료되었습니다. 결과가 들어오면 이 자리에서 적중/실패/손익을 보여줍니다.")
     elif status_info["status"] == "구매 가능":
-        st.info("지금은 구매 가능한 추천 화면입니다. 아래 10초 수동구매 모드에서 조합 복사 후 공식 페이지에서 직접 입력하세요.")
+        st.info("지금은 구매 가능한 추천 화면입니다. 아래 10초 수동구매 모드에서 조합 복사 후 공식 구매표에서 직접 입력하세요.")
     else:
         st.info("아직 구매 대기 구간입니다. 추천은 유지되며 경주시간이 가까워지면 바로 확인하면 됩니다.")
 
@@ -2250,7 +2271,7 @@ def render_mobile_quick_view() -> None:
     <div class="combo-main" style="font-size:3.2rem;">{first_combo}</div>
     <div class="combo-sub">1조합 6장 · 6,000원</div>
   </div>
-  <div class="mobile-safe-note">추천 조합을 보고 공식 구매페이지에서 직접 입력</div>
+  <div class="mobile-safe-note">추천 조합을 보고 공식 구매표에서 직접 입력</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -2280,6 +2301,8 @@ def render_mobile_quick_view() -> None:
                 key=f"mobile_group_download_{idx+1}",
             )
 
+    st.markdown(derbyon_notice_html(meet, race_no, first_combo), unsafe_allow_html=True)
+
     st.markdown(f"""
 <div style="max-width:560px; margin:14px auto; background:#fff; color:#111; border-radius:22px; padding:18px; border:1px solid #e5e7eb;">
   <div style="font-size:1.15rem; font-weight:1000; color:#0f3b76; margin-bottom:12px;">KRA 공식 마권구매 페이지 입력 안내</div>
@@ -2290,7 +2313,7 @@ def render_mobile_quick_view() -> None:
     <div>마번: <b>{first_combo}</b></div>
     <div>구매금액: <b>각 1,000원</b></div>
   </div>
-  <div style="margin-top:12px; color:#6b7280; font-weight:800; font-size:.9rem;">결제 및 최종 확정은 공식 구매페이지에서 직접 진행</div>
+  <div style="margin-top:12px; color:#6b7280; font-weight:800; font-size:.9rem;">결제 및 최종 확정은 공식 구매표에서 직접 진행</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -2307,9 +2330,9 @@ def render_mobile_quick_view() -> None:
     with d2:
         if st.button("🔄 추천 확인", use_container_width=True):
             st.rerun()
-    st.link_button("↗ 공식 마권구매 열기", kra_buy_url(meet), type="primary", use_container_width=True)
+    st.link_button("↗ 더비온 공식 구매표 열기", kra_buy_url(meet), type="primary", use_container_width=True)
 
-    st.caption("※ S26 Ultra 256GB 화면에 맞춰 분석 앱 → 10초 수동구매 모드 → 공식 구매페이지 이동 흐름으로 구성했습니다. 모바일에서 직접 허브분석 실행 가능, PC의 전체 분석/허브/API/빅데이터 기능은 그대로 유지됩니다.")
+    st.caption("※ S26 Ultra 256GB 화면에 맞춰 분석 앱 → 10초 수동구매 모드 → 공식 구매표 이동 흐름으로 구성했습니다. 모바일에서 직접 허브분석 실행 가능, PC의 전체 분석/허브/API/빅데이터 기능은 그대로 유지됩니다.")
     st.stop()
 
 
@@ -2514,7 +2537,7 @@ def render_live_panel(rc_date: str, meet: str, race_no: int, selected: List[str]
 </div>
 """, unsafe_allow_html=True)
         st.caption("경마 결과는 보장되지 않습니다. 실구매는 본인 판단과 책임, 소액 원칙으로만 진행하세요.")
-        st.link_button("↗ KRA 공식 마권구매 홈페이지 바로가기", kra_buy_url(meet), use_container_width=True)
+        st.link_button("↗ 더비온/KRA 공식 구매표 열기", kra_buy_url(meet), use_container_width=True)
         st.caption("※ 자동구매 아님 · KRA 공식 화면으로 이동 · 로그인/구매는 본인 직접 진행")
     with right:
         st.markdown("#### 🧾 10초 수동구매 체크")
@@ -2574,7 +2597,7 @@ def render_api_hub_panel(status: pd.DataFrame, data: Dict[str, pd.DataFrame]) ->
 def render_triple18_dashboard_module(result: Dict[str, Any], meet: str) -> None:
     """PC/관리 화면에서도 모바일과 같은 18,000원 삼쌍승 18장 구매표를 확인합니다."""
     st.markdown("### 🎯 18,000원 기준 · 삼쌍승 18장 대시보드")
-    st.info("상단 추천창 3개를 만들고, 각 추천창의 3마리 조합을 6순서로 전개합니다. 총 18장 × 1,000원 = 18,000원입니다. 자동구매/자동결제는 없고 공식 페이지에서 직접 입력·확정합니다.")
+    st.info("상단 추천창 3개를 만들고, 각 추천창의 3마리 조합을 6순서로 전개합니다. 총 18장 × 1,000원 = 18,000원입니다. 자동구매/자동결제는 없고 공식 구매표에서 직접 입력·확정합니다.")
 
     groups = []
     raw = result.get("삼쌍승3묶음", "")
@@ -2618,7 +2641,7 @@ def render_triple18_dashboard_module(result: Dict[str, Any], meet: str) -> None:
     st.markdown("#### 📋 복사용 추천번호")
     st.code(copy_text, language="text")
     st.download_button("추천번호 텍스트 받기", data=copy_text.encode("utf-8"), file_name="MARU_삼쌍승18장.txt", mime="text/plain", use_container_width=True)
-    st.link_button("↗ 공식 마권구매 페이지 열기", kra_buy_url(meet), type="primary", use_container_width=True)
+    st.link_button("↗ 더비온 공식 구매표 열기", kra_buy_url(meet), type="primary", use_container_width=True)
     st.caption("※ 추천번호를 복사/확인한 뒤 공식 구매 페이지에서 사용자가 직접 입력·결제합니다.")
 
 
@@ -2632,7 +2655,7 @@ def render_help_panel() -> None:
 4. 추천 결과는 참고용입니다. 실제 구매는 공식 KRA 화면에서 직접 입력·확정합니다.  
 5. **18,000원 삼쌍승 18장**은 손실을 줄이는 구조일 뿐 수익 보장이 아닙니다.
 
-**자동구매/자동결제 기능은 없습니다.** 이 앱은 분석, 기록, 허브 저장, 공식 페이지 이동만 제공합니다.
+**자동구매/자동결제 기능은 없습니다.** 이 앱은 분석, 기록, 허브 저장, 공식 구매표 이동만 제공합니다.
 
 ### 스마트 수집 원칙
 - 26개 API를 매번 전부 호출하지 않습니다.
@@ -2669,6 +2692,7 @@ def render() -> None:
         st.caption("PC 화면은 기존 전체 대시보드 유지")
         st.link_button("📱 모바일 10초 구매 전용 화면", "?mode=mobile", use_container_width=True)
         st.link_button("🖥 휴대폰에서 PC 관리화면 보기", "?mode=pc", use_container_width=True)
+        st.toggle("✅ 더비온 등록완료 모드", value=st.session_state.get("derbyon_registered", True), key="derbyon_registered", help="본인인증/등록을 마친 경우 공식 구매표 이동 안내를 활성화합니다. 자동구매는 하지 않습니다.")
         st.info("API URL 26개는 프로그램 안에 고정 탑재되어 있습니다. URL은 다시 입력하지 않아도 됩니다.")
         st.info(f"현재 한국시간: {now_kst().strftime('%Y-%m-%d %H:%M:%S')} KST")
         current_key = get_api_key()
