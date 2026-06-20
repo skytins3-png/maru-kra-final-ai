@@ -1,1 +1,0 @@
-MARU KRA FINAL 26API RACE TIME MATCH FIX\n- 실제 KRA 경주시간표/경주개요 매칭\n- 경주시간 미입력 시 구매 가능 오표시 방지\n- 지난 경주는 결과대기/결과확인으로 표시\n- 모바일 경량화/허브/PC 구조 유지
