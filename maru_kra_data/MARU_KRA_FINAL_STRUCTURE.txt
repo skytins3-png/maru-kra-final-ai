@@ -33,7 +33,7 @@ MARU KRA 최종 통합 구조
 
 3. PC 역할
 - 전체 분석 대시보드 확인
-- 19개 API 상태 확인
+- 26개 API 상태 확인
 - KRA 메뉴 수집 상태 확인
 - 경주시간표 전체 확인
 - 출전마/기수/조교사/말 점수 확인
@@ -66,3 +66,13 @@ KRA API / KRA 공식메뉴
 6. 자동구매 제한
 - 이 앱은 자동구매/자동결제 기능을 포함하지 않음
 - 공식 구매페이지로 이동 후 사용자가 직접 입력/확정
+
+
+[추가 7개 API 반영]
+- 경주개요 API3_1 raceInfo_1
+- 출전취소 API9_1 raceHorseCancelInfo_1
+- 출전등록말 API23_1 entryRaceHorse_1
+- 확정배당통합 API160_1 integratedInfo_1
+- 기수성적 API11_1 jockeyResult_1
+- 경주성적상세 API214_1 RaceDetailResult_1
+- 경주마장제 API191_1 HorseShoe_1
