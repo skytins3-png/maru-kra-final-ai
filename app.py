@@ -379,27 +379,35 @@ def get_api_switches() -> Dict[str, bool]:
 
 def render_api_onoff_panel() -> None:
     with st.sidebar.expander("🔌 실시간 API ON/OFF", expanded=False):
-        st.toggle("전체 실시간 API 호출", value=st.session_state.get("api_master_on", True), key="api_master_on", help="끄면 API를 부르지 않고 캐시/샘플로 화면만 확인합니다.")
+        # Streamlit은 위젯(key)이 생성된 뒤 같은 실행 흐름에서 st.session_state[key]를 수정하면 오류가 납니다.
+        # 그래서 일괄 ON/OFF 버튼을 먼저 처리하고, 그 다음 토글 위젯을 생성합니다.
         st.caption("현장에서 HTTP 500 나는 항목만 OFF 해도 앱은 계속 돌아갑니다.")
         c1, c2, c3 = st.columns(3)
         with c1:
-            if st.button("핵심 ON", use_container_width=True):
+            if st.button("핵심 ON", use_container_width=True, key="api_bulk_core_on"):
                 st.session_state["api_master_on"] = True
                 for k, _ in API_LABELS:
                     st.session_state[f"api_on_{k}"] = k in CORE_DEFAULT_API_KEYS
                 st.rerun()
         with c2:
-            if st.button("전체 ON", use_container_width=True):
+            if st.button("전체 ON", use_container_width=True, key="api_bulk_all_on"):
                 st.session_state["api_master_on"] = True
                 for k, _ in API_LABELS:
                     st.session_state[f"api_on_{k}"] = True
                 st.rerun()
         with c3:
-            if st.button("전체 OFF", use_container_width=True):
+            if st.button("전체 OFF", use_container_width=True, key="api_bulk_all_off"):
                 st.session_state["api_master_on"] = False
                 for k, _ in API_LABELS:
                     st.session_state[f"api_on_{k}"] = False
                 st.rerun()
+
+        st.toggle(
+            "전체 실시간 API 호출",
+            value=st.session_state.get("api_master_on", True),
+            key="api_master_on",
+            help="끄면 API를 부르지 않고 캐시/샘플로 화면만 확인합니다.",
+        )
         defaults = default_onoff_state()
         for k, label in API_LABELS:
             st.toggle(label, value=st.session_state.get(f"api_on_{k}", defaults.get(k, True)), key=f"api_on_{k}")
