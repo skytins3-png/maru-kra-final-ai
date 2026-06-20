@@ -1695,30 +1695,68 @@ def mobile_ready_recommendations(limit: int = 20) -> pd.DataFrame:
     if hub.empty:
         return pd.DataFrame()
     work = hub.copy()
+    # 안전 보정: 예전 mobile_recommend.json / CSV에는 "저장시각" 컬럼이 없을 수 있음
+    # 컬럼 공백 제거 + 영문/구버전 키를 한글 표준 키로 보정하여 KeyError 방지
+    try:
+        work.columns = work.columns.astype(str).str.strip()
+    except Exception:
+        pass
+    now = now_kst()
+    if "저장시각" not in work.columns:
+        for alt in ["recommended_at", "saved_at", "timestamp", "created_at", "time"]:
+            if alt in work.columns:
+                work["저장시각"] = work[alt]
+                break
+    if "저장시각" not in work.columns:
+        work["저장시각"] = now_str()
+    if "날짜" not in work.columns:
+        for alt in ["date", "race_date", "rcDate"]:
+            if alt in work.columns:
+                work["날짜"] = work[alt]
+                break
+    if "날짜" not in work.columns:
+        work["날짜"] = today_kst()
+    if "경마장" not in work.columns:
+        for alt in ["racecourse", "meet", "경마장명"]:
+            if alt in work.columns:
+                work["경마장"] = work[alt]
+                break
+    if "경주번호" not in work.columns:
+        for alt in ["race_no", "raceNo", "경주"]:
+            if alt in work.columns:
+                work["경주번호"] = work[alt]
+                break
     today = today_kst()
     if "날짜" in work.columns:
-        work = work[work["날짜"].astype(str).str.replace("-", "", regex=False).str[:8] == today]
-    if "저장시각" in work.columns:
-        now = now_kst()
-        ages = []
-        keep_rows = []
-        for _, r in work.iterrows():
-            dt = _parse_kst_time(r.get("저장시각", ""))
-            age = 999999 if dt is None else int((now - dt).total_seconds() // 60)
-            ages.append(age)
-            race_time_text = _race_time_text_from_row(r.to_dict())
-            race_dt = parse_today_race_datetime(race_time_text) if race_time_text else None
-            result_text = str(r.get("결과마번", "") or "").strip()
-            has_result = bool(result_text and result_text not in ["결과대기", "nan", "None"])
-            if has_result:
-                keep_rows.append(age <= 240)
-            elif race_dt is not None and race_dt <= now:
-                keep_rows.append(age <= 240)
-            else:
-                keep_rows.append(age <= MOBILE_READY_WINDOW_MIN)
-        work["추천경과분"] = ages
-        work = work[pd.Series(keep_rows, index=work.index)]
-        work = work.sort_values("저장시각", ascending=False)
+        today_mask = work["날짜"].astype(str).str.replace("-", "", regex=False).str[:8] == today
+        # 날짜가 비어 있는 구버전 JSON은 오늘 추천으로 간주
+        blank_mask = work["날짜"].astype(str).str.strip().isin(["", "nan", "None"])
+        work = work[today_mask | blank_mask]
+    ages = []
+    keep_rows = []
+    sort_keys = []
+    for _, r in work.iterrows():
+        dt = _parse_kst_time(r.get("저장시각", ""))
+        if dt is None:
+            dt = now
+        age = int((now - dt).total_seconds() // 60)
+        ages.append(age)
+        sort_keys.append(dt)
+        race_time_text = _race_time_text_from_row(r.to_dict())
+        race_dt = parse_today_race_datetime(race_time_text) if race_time_text else None
+        result_text = str(r.get("결과마번", "") or "").strip()
+        has_result = bool(result_text and result_text not in ["결과대기", "nan", "None"])
+        if has_result:
+            keep_rows.append(age <= 240)
+        elif race_dt is not None and race_dt <= now:
+            keep_rows.append(age <= 240)
+        else:
+            keep_rows.append(age <= MOBILE_READY_WINDOW_MIN)
+    work["추천경과분"] = ages
+    work["_정렬시각"] = sort_keys
+    work = work[pd.Series(keep_rows, index=work.index)]
+    if "_정렬시각" in work.columns:
+        work = work.sort_values("_정렬시각", ascending=False).drop(columns=["_정렬시각"], errors="ignore")
     if not work.empty:
         key_cols = [c for c in ["날짜", "경마장", "경주번호", "전략명"] if c in work.columns]
         if key_cols:
